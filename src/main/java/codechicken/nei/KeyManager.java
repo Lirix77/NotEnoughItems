@@ -25,21 +25,25 @@ public class KeyManager {
     public static LinkedList<IKeyStateTracker> trackers = new LinkedList<>();
 
     public static void tickKeyStates() {
-        for (Entry<String, KeyState> entry : keyStates.entrySet()) {
-            final boolean down = NEIClientConfig.isKeyHashDown(entry.getKey());
-            final KeyState state = entry.getValue();
+        try {
+            for (Entry<String, KeyState> entry : keyStates.entrySet()) {
+                final boolean down = NEIClientConfig.isKeyHashDown(entry.getKey());
+                final KeyState state = entry.getValue();
 
-            if (down) {
-                state.down = !state.held;
-                state.up = false;
-            } else {
-                state.up = state.held;
-                state.down = false;
+                if (down) {
+                    state.down = !state.held;
+                    state.up = false;
+                } else {
+                    state.up = state.held;
+                    state.down = false;
+                }
+
+                state.held = down;
             }
 
-            state.held = down;
+            for (IKeyStateTracker tracker : trackers) tracker.tickKeyStates();
+        } catch (Exception ex) {
+            ex.printStackTrace();
         }
-
-        for (IKeyStateTracker tracker : trackers) tracker.tickKeyStates();
     }
 }
