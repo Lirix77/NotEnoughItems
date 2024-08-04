@@ -35,6 +35,8 @@ import codechicken.nei.event.NEIRegisterHandlerInfosEvent;
 import codechicken.nei.guihook.GuiContainerManager;
 import cpw.mods.fml.common.Loader;
 
+import static codechicken.nei.NEIClientConfig.configDir;
+
 public abstract class GuiRecipeTab extends Widget {
 
     public static HandlerInfo DEFAULT_HANDLER_INFO = getDefaultHandlerInfo();
@@ -210,7 +212,7 @@ public abstract class GuiRecipeTab extends Widget {
                 return;
             }
         } else {
-            File handlerFile = NEIClientConfig.handlerFile;
+            File handlerFile = new File(configDir, "handlers.csv");
             if (!handlerFile.exists()) {
                 NEIClientConfig.logger.info("Config file doesn't exist, creating");
                 try {
@@ -225,7 +227,7 @@ public abstract class GuiRecipeTab extends Widget {
                 }
             }
             try {
-                url = NEIClientConfig.handlerFile.toURI().toURL();
+                url = handlerFile.toURI().toURL();
             } catch (MalformedURLException e) {
                 NEIClientConfig.logger.info("Invalid URL for handlers csv (via config).");
                 e.printStackTrace();

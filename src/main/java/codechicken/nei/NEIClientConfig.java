@@ -70,12 +70,6 @@ public class NEIClientConfig {
             new File("saves/NEI/client.dat"),
             new ConfigFile(new File(configDir, "client.cfg")));
     public static ConfigSet world;
-    public static final File handlerFile = new File(configDir, "handlers.csv");
-    public static final File catalystFile = new File(configDir, "catalysts.csv");
-    public static final File serialHandlersFile = new File(configDir, "serialhandlers.cfg");
-    public static final File heightHackHandlersFile = new File(configDir, "heighthackhandlers.cfg");
-    public static final File handlerOrderingFile = new File(configDir, "handlerordering.csv");
-    public static final File hiddenHandlersFile = new File(configDir, "hiddenhandlers.csv");
 
     @Deprecated
     public static File bookmarkFile;

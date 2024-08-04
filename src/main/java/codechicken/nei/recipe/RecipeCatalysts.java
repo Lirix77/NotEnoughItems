@@ -31,6 +31,8 @@ import codechicken.nei.NEIServerUtils;
 import codechicken.nei.PositionedStack;
 import cpw.mods.fml.common.Loader;
 
+import static codechicken.nei.NEIClientConfig.configDir;
+
 public class RecipeCatalysts {
 
     private static final Map<String, CatalystInfoList> catalystsAdderFromAPI = new HashMap<>();
@@ -142,7 +144,7 @@ public class RecipeCatalysts {
                 return;
             }
         } else {
-            File catalystFile = NEIClientConfig.catalystFile;
+            File catalystFile = new File(configDir, "catalysts.csv");
             if (!catalystFile.exists()) {
                 NEIClientConfig.logger.info("Config file doesn't exist, creating");
                 try {
@@ -157,7 +159,7 @@ public class RecipeCatalysts {
                 }
             }
             try {
-                url = NEIClientConfig.catalystFile.toURI().toURL();
+                url = catalystFile.toURI().toURL();
             } catch (MalformedURLException e) {
                 NEIClientConfig.logger.warn("Invalid URL for catalysts csv (via config).");
                 e.printStackTrace();

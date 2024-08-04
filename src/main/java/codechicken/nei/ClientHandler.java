@@ -52,6 +52,8 @@ import cpw.mods.fml.common.gameevent.TickEvent.Phase;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
+import static codechicken.nei.NEIClientConfig.configDir;
+
 public class ClientHandler {
 
     private static String[] defaultHandlerOrdering = {
@@ -154,7 +156,7 @@ public class ClientHandler {
     }
 
     public static void loadSerialHandlers() {
-        File file = NEIClientConfig.serialHandlersFile;
+        File file = new File(configDir, "serialhandlers.cfg");
         if (!file.exists()) {
             try (FileWriter writer = new FileWriter(file)) {
                 NEIClientConfig.logger.info("Creating default serial handlers list {}", file);
@@ -177,7 +179,7 @@ public class ClientHandler {
     }
 
     public static void loadHeightHackHandlers() {
-        File file = NEIClientConfig.heightHackHandlersFile;
+        File file = new File(configDir, "heighthackhandlers.cfg");
         if (!file.exists()) {
             try (FileWriter writer = new FileWriter(file)) {
                 NEIClientConfig.logger.info("Creating default height hack handlers list {}", file);
@@ -202,7 +204,7 @@ public class ClientHandler {
     }
 
     public static void loadHiddenHandlers() {
-        File file = NEIClientConfig.hiddenHandlersFile;
+        File file = new File(configDir, "hiddenhandlers.csv");
         if (!file.exists()) {
             try (FileWriter writer = new FileWriter(file)) {
                 NEIClientConfig.logger.info("Creating default hidden handlers list {}", file);
@@ -243,7 +245,7 @@ public class ClientHandler {
     }
 
     public static void loadHandlerOrdering() {
-        File file = NEIClientConfig.handlerOrderingFile;
+        File file = new File(configDir, "handlerordering.csv");
         if (!file.exists()) {
             try (FileWriter writer = new FileWriter(file)) {
                 NEIClientConfig.logger.info("Creating default handler ordering CSV {}", file);
