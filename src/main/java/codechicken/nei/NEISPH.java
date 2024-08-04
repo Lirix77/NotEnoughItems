@@ -203,15 +203,16 @@ public class NEISPH implements IServerPacketHandler {
         LinkedList<String> enabled = new LinkedList<>();
         LinkedList<ItemStack> bannedItems = new LinkedList<>();
         PlayerSave playerSave = NEIServerConfig.forPlayer(player.getCommandSenderName());
-
-        for (String name : NEIActions.nameActionMap.keySet()) {
-            if (NEIServerConfig.canPlayerPerformAction(player.getCommandSenderName(), name)) actions.add(name);
-            if (NEIServerConfig.isActionDisabled(player.dimension, name)) disabled.add(name);
-            if (playerSave.isActionEnabled(name)) enabled.add(name);
-        }
-        for (ItemStackMap.Entry<Set<String>> entry : NEIServerConfig.bannedItems.entries())
-            if (!NEIServerConfig.isPlayerInList(player.getCommandSenderName(), entry.value, true))
-                bannedItems.add(entry.key);
+        try {
+            for (String name : NEIActions.nameActionMap.keySet()) {
+                if (NEIServerConfig.canPlayerPerformAction(player.getCommandSenderName(), name)) actions.add(name);
+                if (NEIServerConfig.isActionDisabled(player.dimension, name)) disabled.add(name);
+                if (playerSave.isActionEnabled(name)) enabled.add(name);
+            }
+            for (ItemStackMap.Entry<Set<String>> entry : NEIServerConfig.bannedItems.entries())
+                if (!NEIServerConfig.isPlayerInList(player.getCommandSenderName(), entry.value, true))
+                    bannedItems.add(entry.key);
+        } catch(Exception ex){}
 
         PacketCustom packet = new PacketCustom(channel, S2C.SEND_LOGIN_STATE);
 

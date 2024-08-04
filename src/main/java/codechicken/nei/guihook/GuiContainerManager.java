@@ -146,12 +146,13 @@ public class GuiContainerManager {
         if (namelist.size() == 0) namelist.add("Unnamed");
 
         if (namelist.get(0) == null || namelist.get(0).equals("")) namelist.set(0, "Unnamed");
-
-        if (includeHandlers) {
-            for (IContainerTooltipHandler handler : tooltipHandlers) {
-                namelist = handler.handleItemDisplayName(gui, stack, namelist);
+        try {
+            if (includeHandlers) {
+                for (IContainerTooltipHandler handler : tooltipHandlers) {
+                    namelist = handler.handleItemDisplayName(gui, stack, namelist);
+                }
             }
-        }
+        } catch (Exception ex) {}
 
         namelist.set(0, stack.getRarity().rarityColor.toString() + namelist.get(0));
 
