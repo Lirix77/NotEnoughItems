@@ -771,7 +771,7 @@ public class NEIClientConfig {
     }
 
     public static boolean canCheatItem(ItemStack stack) {
-        return canPerformAction("item") && !bannedBlocks.contains(stack);
+       return getCheatMode() == 2;
     }
 
     public static boolean canPerformAction(String name) {
