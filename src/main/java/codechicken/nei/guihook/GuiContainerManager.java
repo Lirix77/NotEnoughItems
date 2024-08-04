@@ -424,44 +424,47 @@ public class GuiContainerManager {
      */
     public boolean lastKeyTyped(int keyID, char keyChar) {
         if (keyID == 1) return false;
-
-        for (IContainerInputHandler inputhander : inputHandlers)
-            if (inputhander.lastKeyTyped(window, keyChar, keyID)) return true;
+        try {
+            for (IContainerInputHandler inputhander : inputHandlers)
+                if (inputhander.lastKeyTyped(window, keyChar, keyID)) return true;
+        } catch (Exception ex) {}
 
         return false;
     }
 
     public boolean firstKeyTyped(char keyChar, int keyID) {
-        for (IContainerInputHandler inputhander : inputHandlers) inputhander.onKeyTyped(window, keyChar, keyID);
+        try {
+            for (IContainerInputHandler inputhander : inputHandlers) inputhander.onKeyTyped(window, keyChar, keyID);
 
-        for (IContainerInputHandler inputhander : inputHandlers)
-            if (inputhander.keyTyped(window, keyChar, keyID)) return true;
-
+            for (IContainerInputHandler inputhander : inputHandlers)
+                if (inputhander.keyTyped(window, keyChar, keyID)) return true;
+        } catch (Exception ex) {}
         return false;
     }
 
     public boolean mouseClicked(int mousex, int mousey, int button) {
-        for (IContainerInputHandler inputhander : inputHandlers)
-            inputhander.onMouseClicked(window, mousex, mousey, button);
+        try {
+            for (IContainerInputHandler inputhander : inputHandlers)
+                inputhander.onMouseClicked(window, mousex, mousey, button);
 
-        for (IContainerInputHandler inputhander : inputHandlers)
-            if (inputhander.mouseClicked(window, mousex, mousey, button)) {
-                clickHandled |= 1 << button;
-                return true;
-            }
-
+            for (IContainerInputHandler inputhander : inputHandlers)
+                if (inputhander.mouseClicked(window, mousex, mousey, button)) {
+                    clickHandled |= 1 << button;
+                    return true;
+                }
+        } catch (Exception ex) {}
         return false;
     }
 
     public void mouseScrolled(int scrolled) {
         Point mousepos = getMousePosition();
+        try {
+            for (IContainerInputHandler inputHandler : inputHandlers)
+                inputHandler.onMouseScrolled(window, mousepos.x, mousepos.y, scrolled);
 
-        for (IContainerInputHandler inputHandler : inputHandlers)
-            inputHandler.onMouseScrolled(window, mousepos.x, mousepos.y, scrolled);
-
-        for (IContainerInputHandler inputHandler : inputHandlers)
-            if (inputHandler.mouseScrolled(window, mousepos.x, mousepos.y, scrolled)) return;
-
+            for (IContainerInputHandler inputHandler : inputHandlers)
+                if (inputHandler.mouseScrolled(window, mousepos.x, mousepos.y, scrolled)) return;
+        } catch (Exception ex) {}
         if (window instanceof IGuiHandleMouseWheel) ((IGuiHandleMouseWheel) window).mouseScrolled(scrolled);
     }
 
@@ -478,15 +481,20 @@ public class GuiContainerManager {
     }
 
     public void mouseUp(int mousex, int mousey, int button) {
-        for (IContainerInputHandler inputhander : inputHandlers) inputhander.onMouseUp(window, mousex, mousey, button);
+        try {
+            for (IContainerInputHandler inputhander : inputHandlers)
+                inputhander.onMouseUp(window, mousex, mousey, button);
+        } catch (Exception ex) {}
     }
 
     /**
      * Called from mouseClickMove
      */
     public void mouseDragged(int mousex, int mousey, int button, long heldTime) {
-        for (IContainerInputHandler inputhander : inputHandlers)
-            inputhander.onMouseDragged(window, mousex, mousey, button, heldTime);
+        try {
+            for (IContainerInputHandler inputhander : inputHandlers)
+                inputhander.onMouseDragged(window, mousex, mousey, button, heldTime);
+        } catch (Exception ex) {}
     }
 
     /**
@@ -505,34 +513,39 @@ public class GuiContainerManager {
     }
 
     public void renderToolTips(int mousex, int mousey) {
-        List<String> tooltip = new LinkedList<>();
-        FontRenderer font = GuiDraw.fontRenderer;
-
-        synchronized (instanceTooltipHandlers) {
-            for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
-        }
-
-        if (tooltip.isEmpty() && shouldShowTooltip(window)) { // mouseover tip, not holding an item
-            ItemStack stack = getStackMouseOver(window);
-            font = getFontRenderer(stack);
-            if (stack != null) {
-                tooltip = itemDisplayNameMultiline(stack, window, true);
-                applyItemCountDetails(tooltip, stack);
-            }
+        try {
+            List<String> tooltip = new LinkedList<>();
+            FontRenderer font = GuiDraw.fontRenderer;
 
             synchronized (instanceTooltipHandlers) {
                 for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                    tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
+                    tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
             }
-        }
 
-        if (tooltip.size() > 0) tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE); // add space after 'title'
+            if (tooltip.isEmpty() && shouldShowTooltip(window)) { // mouseover tip, not holding an item
+                ItemStack stack = getStackMouseOver(window);
+                font = getFontRenderer(stack);
+                if (stack != null) {
+                    tooltip = itemDisplayNameMultiline(stack, window, true);
+                    applyItemCountDetails(tooltip, stack);
+                }
 
-        drawPagedTooltip(font, mousex + 12, mousey - 12, tooltip);
+                synchronized (instanceTooltipHandlers) {
+                    for (IContainerTooltipHandler handler : instanceTooltipHandlers)
+                        tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
+                }
+            }
 
-        for (IContainerDrawHandler drawHandler : drawHandlers) {
-            drawHandler.postRenderTooltips(window, mousex, mousey, tooltip);
+            if (tooltip.size() > 0)
+                tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE); // add space after 'title'
+
+            drawPagedTooltip(font, mousex + 12, mousey - 12, tooltip);
+
+            for (IContainerDrawHandler drawHandler : drawHandlers) {
+                drawHandler.postRenderTooltips(window, mousex, mousey, tooltip);
+            }
+        } catch (Throwable e) {
+            e.printStackTrace();
         }
     }
 
