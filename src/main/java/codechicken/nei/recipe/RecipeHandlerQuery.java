@@ -34,9 +34,9 @@ class RecipeHandlerQuery<T extends IRecipeHandler> {
     }
 
     ArrayList<T> runWithProfiling(String profilerSection) {
-        TaskProfiler profiler = ProfilerRecipeHandler.getProfiler();
-        profiler.clear();
-        profiler.start(profilerSection);
+        //TaskProfiler profiler = ProfilerRecipeHandler.getProfiler();
+        //profiler.clear();
+        //profiler.start(profilerSection);
         try {
             ArrayList<T> handlers = getRecipeHandlersParallel();
 
@@ -48,9 +48,9 @@ class RecipeHandlerQuery<T extends IRecipeHandler> {
             printLog(e);
             displayRecipeLookupError();
             return new ArrayList<>(0);
-        } finally {
-            profiler.end();
-        }
+        }// finally {
+        //    profiler.end();
+        //}
     }
 
     private ArrayList<T> getRecipeHandlersParallel() throws InterruptedException, ExecutionException {
