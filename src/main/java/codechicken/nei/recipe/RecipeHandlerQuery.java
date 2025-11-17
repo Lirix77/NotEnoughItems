@@ -17,7 +17,7 @@ import codechicken.nei.ItemList;
 import codechicken.nei.NEIClientConfig;
 import codechicken.nei.util.AsyncTaskProfiler;
 
-class RecipeHandlerQuery<T extends IRecipeHandler> {
+public class RecipeHandlerQuery<T extends IRecipeHandler> {
 
     private final Function<T, T> recipeHandlerFunction;
     private final List<T> recipeHandlers;
@@ -25,15 +25,15 @@ class RecipeHandlerQuery<T extends IRecipeHandler> {
     private final String[] errorMessage;
     private boolean error = false;
 
-    RecipeHandlerQuery(Function<T, T> recipeHandlerFunction, List<T> recipeHandlers, List<T> serialRecipeHandlers,
-            String... errorMessage) {
+    public RecipeHandlerQuery(Function<T, T> recipeHandlerFunction, List<T> recipeHandlers,
+            List<T> serialRecipeHandlers, String... errorMessage) {
         this.recipeHandlerFunction = recipeHandlerFunction;
         this.recipeHandlers = recipeHandlers;
         this.serialRecipeHandlers = serialRecipeHandlers;
         this.errorMessage = errorMessage;
     }
 
-    ArrayList<T> runWithProfiling(String profilerSection) {
+    public ArrayList<T> runWithProfiling(String profilerSection) {
         //TaskProfiler profiler = ProfilerRecipeHandler.getProfiler();
         //profiler.clear();
         //profiler.start(profilerSection);
@@ -55,7 +55,13 @@ class RecipeHandlerQuery<T extends IRecipeHandler> {
 
     private ArrayList<T> getRecipeHandlersParallel() throws InterruptedException, ExecutionException {
         // Pre-find the fuels so we're not fighting over it
-        FuelRecipeHandler.findFuelsOnceParallel();
+
+        if (NEIClientConfig.getBooleanSetting("findFuelsParallel")) {
+            FuelRecipeHandler.findFuelsOnceParallel();
+        } else {
+            FuelRecipeHandler.findFuelsOnce();
+        }
+
         ArrayList<T> handlers = getSerialHandlersWithRecipes();
         handlers.addAll(getHandlersWithRecipes());
         handlers.sort(NEIClientConfig.HANDLER_COMPARATOR);

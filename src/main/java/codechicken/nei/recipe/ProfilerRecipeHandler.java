@@ -39,7 +39,7 @@ public class ProfilerRecipeHandler implements ICraftingHandler, IUsageHandler {
 
     @Override
     public int numRecipes() {
-        if (!NEIClientConfig.getBooleanSetting("inventory.profileRecipes")) return 0;
+        if (!NEIClientConfig.isProfileRecipeEnabled()) return 0;
 
         return (int) Math.ceil(
                 ((crafting ? GuiCraftingRecipe.craftinghandlers.size() : GuiUsageRecipe.usagehandlers.size()) - 1)
@@ -100,11 +100,6 @@ public class ProfilerRecipeHandler implements ICraftingHandler, IUsageHandler {
     @Override
     public IOverlayHandler getOverlayHandler(GuiContainer gui, int recipe) {
         return null;
-    }
-
-    @Override
-    public int recipiesPerPage() {
-        return 1;
     }
 
     @Override

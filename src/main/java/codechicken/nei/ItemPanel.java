@@ -1,17 +1,18 @@
 package codechicken.nei;
 
-import static codechicken.lib.gui.GuiDraw.drawRect;
-
 import java.util.ArrayList;
-
-import javax.annotation.Nullable;
+import java.util.List;
+import java.util.Map;
 
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.item.ItemStack;
 
+import codechicken.lib.gui.GuiDraw;
 import codechicken.lib.vec.Rectangle4i;
+import codechicken.nei.ItemsPanelGrid.ItemsPanelGridSlot;
+import codechicken.nei.util.NEIMouseUtils;
 
-public class ItemPanel extends PanelWidget {
+public class ItemPanel extends PanelWidget<ItemsPanelGrid> {
 
     /**
      * Backwards compat :-/
@@ -31,67 +32,50 @@ public class ItemPanel extends PanelWidget {
         return super.getStackMouseOver(mousex, mousey);
     }
 
-    public Button more;
-    public Button less;
-    public ItemQuantityField quantity;
-    public ItemHistoryPanel historyPanel;
+    public ItemHistoryPanel historyPanel = new ItemHistoryPanel();
+    public ItemCraftablesPanel craftablesPanel = new ItemCraftablesPanel();
+    protected Button toggleGroups;
 
-    public static class ItemPanelSlot {
+    @Deprecated
+    public static class ItemPanelSlot extends ItemsPanelGridSlot {
 
-        public ItemStack item;
-        public int slotIndex;
-
-        public ItemPanelSlot(int idx, ItemStack stack) {
-            slotIndex = idx;
-            item = stack;
+        @Deprecated
+        public ItemPanelSlot(int idx, ItemStack item) {
+            this(idx, 0, item);
         }
 
         @Deprecated
         public ItemPanelSlot(int idx) {
-            this(idx, ItemPanels.itemPanel.getGrid().getItem(idx));
-        }
-    }
-
-    protected static class ItemPanelGrid extends ItemsGrid {
-
-        public ArrayList<ItemStack> newItems;
-
-        public void setItems(ArrayList<ItemStack> items) {
-            newItems = items;
+            this(idx, 0, ItemPanels.itemPanel.getGrid().getItem(idx));
         }
 
-        public void refresh(GuiContainer gui) {
+        private ItemPanelSlot(int slotIndex, int itemIndex, ItemStack item) {
+            super(slotIndex, itemIndex, item);
+        }
 
-            if (newItems != null) {
-                realItems = newItems;
-                newItems = null;
-                onItemsChanged();
+        protected static ItemPanelSlot of(ItemsPanelGridSlot slot) {
+
+            if (slot != null) {
+                ItemPanelSlot customSlot = new ItemPanelSlot(slot.slotIndex, slot.itemIndex, slot.item);
+                customSlot.groupIndex = slot.groupIndex;
+                customSlot.displayName = slot.displayName;
+                customSlot.bgItemStack = slot.bgItemStack;
+                customSlot.groupSize = slot.groupSize;
+                customSlot.extended = slot.extended;
+                customSlot.bgColor = slot.bgColor;
+                return customSlot;
             }
 
-            super.refresh(gui);
-        }
-
-        @Override
-        protected void beforeDrawSlot(@Nullable ItemPanelSlot focused, int slotIdx, Rectangle4i rect) {
-            if (PresetsWidget.inEditMode()) {
-                if (!PresetsWidget.isHidden(getItem(slotIdx))) drawRect(rect.x, rect.y, rect.w, rect.h, 0xee555555);
-            } else {
-                super.beforeDrawSlot(focused, slotIdx, rect);
-            }
-        }
-
-        @Override
-        public String getMessageOnEmpty() {
-            return ItemList.loadFinished ? null : NEIClientUtils.translate("itempanel.loading");
+            return null;
         }
     }
 
     public ItemPanel() {
-        grid = new ItemPanelGrid();
+        this.grid = new ItemsPanelGrid();
     }
 
     public static void updateItemList(ArrayList<ItemStack> newItems) {
-        ((ItemPanelGrid) ItemPanels.itemPanel.getGrid()).setItems(newItems);
+        ItemPanels.itemPanel.getGrid().setItems(newItems);
         ItemPanels.itemPanel.realItems = newItems;
     }
 
@@ -99,118 +83,110 @@ public class ItemPanel extends PanelWidget {
     public void init() {
         super.init();
 
-        more = new Button("+") {
+        toggleGroups = new Button("G") {
 
             @Override
-            public boolean onButtonPress(boolean rightclick) {
-                if (rightclick) return false;
-
-                int modifier = NEIClientUtils.controlKey() ? 64 : NEIClientUtils.shiftKey() ? 10 : 1;
-                int quantity = NEIClientConfig.getItemQuantity() + modifier;
-
-                if (quantity < 0) {
-                    quantity = 0;
-                }
-
-                ItemPanels.itemPanel.quantity.setText(Integer.toString(quantity));
-                return true;
+            public String getRenderLabel() {
+                return NEIClientUtils.translate("itempanel.collapsed.button");
             }
-        };
-        less = new Button("-") {
+
+            @Override
+            public String getButtonTip() {
+                return NEIClientUtils.translate("itempanel.collapsed.button.tip");
+            }
 
             @Override
             public boolean onButtonPress(boolean rightclick) {
-                if (rightclick) return false;
-
-                int modifier = NEIClientUtils.controlKey() ? -64 : NEIClientUtils.shiftKey() ? -10 : -1;
-                int quantity = NEIClientConfig.getItemQuantity() + modifier;
-
-                if (quantity < 0) {
-                    quantity = 0;
-                }
-
-                ItemPanels.itemPanel.quantity.setText(Integer.toString(quantity));
+                CollapsibleItems.toggleGroups(rightclick ? false : null);
+                ItemList.updateFilter.restart();
                 return true;
             }
         };
 
-        quantity = new ItemQuantityField("quantity");
-        historyPanel = new ItemHistoryPanel();
     }
 
-    @Deprecated
-    public void scroll(int i) {
-        grid.shiftPage(i);
+    @Override
+    public ItemPanelSlot getSlotMouseOver(int mousex, int mousey) {
+        // use ItemPanelSlot for Backwards compat
+        return ItemPanelSlot.of(this.grid.getSlotMouseOver(mousex, mousey));
     }
 
     public String getLabelText() {
         return String.format("%d/%d", getPage(), Math.max(1, getNumPages()));
     }
 
-    protected String getPositioningSettingName() {
-        return "world.panels.items";
+    public Rectangle4i calculateBounds() {
+        final GuiContainer gui = NEIClientUtils.getGuiContainer();
+        final int width = (gui.width - gui.xSize) / 2 - PADDING * 2;
+        final Rectangle4i bounds = new Rectangle4i(
+                (gui.width + gui.xSize) / 2 + PADDING,
+                PADDING,
+                (gui.width - 176) / 2 - PADDING * 2,
+                gui.height - PADDING * 2);
+
+        int paddingLeft = (int) Math
+                .ceil(bounds.w * NEIClientConfig.getSetting("world.panels.items.left").getIntValue() / 100000.0);
+        int paddingTop = (int) Math
+                .ceil(bounds.h * NEIClientConfig.getSetting("world.panels.items.top").getIntValue() / 100000.0);
+        int paddingRight = (int) Math
+                .ceil(bounds.w * NEIClientConfig.getSetting("world.panels.items.right").getIntValue() / 100000.0);
+        int paddingBottom = (int) Math
+                .ceil(bounds.h * NEIClientConfig.getSetting("world.panels.items.bottom").getIntValue() / 100000.0);
+
+        bounds.h = Math.max(ItemsGrid.SLOT_SIZE, bounds.h - paddingTop - paddingBottom);
+        bounds.y = bounds.y + Math.min(paddingTop, bounds.h - ItemsGrid.SLOT_SIZE);
+
+        bounds.w = Math.max(ItemsGrid.SLOT_SIZE, Math.min(bounds.w - paddingLeft - paddingRight, width - paddingRight));
+        bounds.x = bounds.x + Math.max(0, width - bounds.w - paddingRight);
+
+        return bounds;
     }
 
-    public int getMarginLeft(GuiContainer gui) {
-        return (gui.width + gui.xSize) / 2 + PADDING;
-    }
+    @Override
+    protected int resizeHeader(GuiContainer gui) {
+        int marginTop = super.resizeHeader(gui);
 
-    public int getMarginTop(GuiContainer gui) {
-        return PADDING;
-    }
+        toggleGroups.w = pageNext.w;
+        toggleGroups.h = pageNext.h;
+        toggleGroups.y = pageNext.y;
+        toggleGroups.x = pageNext.x - toggleGroups.w - 2;
 
-    public int getWidth(GuiContainer gui) {
-        return gui.width - (gui.xSize + gui.width) / 2 - PADDING * 2;
-    }
-
-    public int getHeight(GuiContainer gui) {
-        return gui.height - getMarginTop(gui) - PADDING;
+        return marginTop;
     }
 
     protected int resizeFooter(GuiContainer gui) {
-        if (!NEIClientConfig.showItemQuantityWidget() && NEIClientConfig.isSearchWidgetCentered()
-                && !NEIClientConfig.showHistoryPanelWidget()) {
+        int footerY = y + h;
+        int footerHeight = 0;
+
+        if (grid.getPerPage() == 0) {
             return 0;
         }
 
-        final int BUTTON_SIZE = 20;
-        more.w = less.w = BUTTON_SIZE;
-        quantity.h = BUTTON_SIZE;
-
-        if (NEIClientConfig.isSearchWidgetCentered()) {
-            more.h = less.h = BUTTON_SIZE;
-            more.x = x + w - BUTTON_SIZE;
-            more.y = less.y = quantity.y = y + h - BUTTON_SIZE;
-            less.x = x;
-            quantity.x = x + BUTTON_SIZE + 2;
-            quantity.w = more.x - quantity.x - 2;
-        } else {
-            quantity.x = (int) (x + (w * 0.7)) + 3;
-            quantity.y = y + h - BUTTON_SIZE;
-            quantity.w = (int) ((w * 0.3) - BUTTON_SIZE - 1);
-
-            more.h = less.h = BUTTON_SIZE / 2;
-            more.y = y + h - (more.h * 2);
-
-            less.x = more.x = quantity.x + quantity.w;
-            less.y = more.y + more.h;
+        if (NEIClientConfig.showItemQuantityWidget() || !NEIClientConfig.isSearchWidgetCentered()) {
+            footerY = LayoutManager.quantity.y;
+            footerHeight = LayoutManager.quantity.h + PanelWidget.PADDING;
         }
 
         if (NEIClientConfig.showHistoryPanelWidget()) {
             historyPanel.x = x;
-            historyPanel.w = w;
-            historyPanel.h = ItemsGrid.SLOT_SIZE * NEIClientConfig.getIntSetting("inventory.history.useRows");
 
-            if (NEIClientConfig.showItemQuantityWidget() || !NEIClientConfig.isSearchWidgetCentered()) {
-                historyPanel.y = quantity.y - historyPanel.h - PanelWidget.PADDING;
-                return quantity.h + historyPanel.h + PanelWidget.PADDING * 2;
-            } else {
-                historyPanel.y = y + h - historyPanel.h;
-                return historyPanel.h + PanelWidget.PADDING;
+            if (historyPanel.setPanelWidth(w) != 0) {
+                footerY = historyPanel.y = footerY - historyPanel.h;
+                footerHeight += historyPanel.h;
+            }
+
+        }
+
+        if (NEIClientConfig.showCraftablesPanelWidget()) {
+            craftablesPanel.x = x;
+
+            if (craftablesPanel.setPanelWidth(w) != 0) {
+                footerY = craftablesPanel.y = footerY - craftablesPanel.h;
+                footerHeight += craftablesPanel.h;
             }
         }
 
-        return quantity.h + PanelWidget.PADDING;
+        return footerHeight;
     }
 
     @Override
@@ -218,37 +194,86 @@ public class ItemPanel extends PanelWidget {
         super.setVisible();
 
         if (grid.getPerPage() > 0) {
-            if (NEIClientConfig.showItemQuantityWidget()) {
-                LayoutManager.addWidget(more);
-                LayoutManager.addWidget(less);
-                LayoutManager.addWidget(quantity);
+
+            if (!CollapsibleItems.isEmpty() && !grid.isEmpty()) {
+                LayoutManager.addWidget(toggleGroups);
+            }
+
+            if (NEIClientConfig.showCraftablesPanelWidget()) {
+                LayoutManager.addWidget(craftablesPanel);
             }
 
             if (NEIClientConfig.showHistoryPanelWidget()) {
                 LayoutManager.addWidget(historyPanel);
             }
+
         }
     }
 
     @Override
     public void resize(GuiContainer gui) {
         super.resize(gui);
-        historyPanel.resize(gui);
+        this.historyPanel.resize(gui);
+        this.craftablesPanel.resize(gui);
     }
 
-    protected ItemStack getDraggedStackWithQuantity(int mouseDownSlot) {
-        ItemStack stack = grid.getItem(mouseDownSlot);
+    protected ItemStack getDraggedStackWithQuantity(ItemStack itemStack) {
+        return ItemQuantityField.prepareStackWithQuantity(itemStack, 0);
+    }
 
-        if (stack != null) {
-            int amount = NEIClientConfig.showItemQuantityWidget() ? NEIClientConfig.getItemQuantity() : 0;
+    @Override
+    public List<String> handleItemTooltip(ItemStack itemstack, int mousex, int mousey, List<String> currenttip) {
 
-            if (amount == 0) {
-                amount = stack.getMaxStackSize();
+        if (!this.grid.forceExpand && !currenttip.isEmpty()) {
+            final ItemsPanelGridSlot hoverSlot = this.grid.getSlotMouseOver(mousex, mousey);
+
+            if (hoverSlot != null && hoverSlot.groupIndex >= 0
+                    && NEIClientConfig.getBooleanSetting("inventory.collapsibleItems.customName")
+                    && !hoverSlot.extended
+                    && !"".equals(hoverSlot.displayName)) {
+                currenttip.clear();
+                currenttip.add(hoverSlot.displayName + GuiDraw.TOOLTIP_LINESPACE);
             }
-
-            return NEIServerUtils.copyStack(stack, amount);
         }
 
-        return null;
+        return super.handleItemTooltip(itemstack, mousex, mousey, currenttip);
     }
+
+    @Override
+    public boolean handleClick(int mousex, int mousey, int button) {
+
+        if (button == 0 && !this.grid.forceExpand && NEIClientUtils.altKey()) {
+            final ItemsPanelGridSlot hoverSlot = this.grid.getSlotMouseOver(mousex, mousey);
+
+            if (hoverSlot != null && hoverSlot.groupIndex >= 0) {
+                CollapsibleItems.setExpanded(hoverSlot.groupIndex, !hoverSlot.extended);
+                this.grid.setItems(this.grid.rawItems);
+                NEIClientUtils.playClickSound();
+                return true;
+            }
+        }
+
+        return super.handleClick(mousex, mousey, button);
+    }
+
+    @Override
+    public Map<String, String> handleHotkeys(int mousex, int mousey, Map<String, String> hotkeys) {
+        final ItemsPanelGridSlot hoverSlot = this.grid.getSlotMouseOver(mousex, mousey);
+
+        if (!this.grid.forceExpand && hoverSlot != null && hoverSlot.groupIndex >= 0 && hoverSlot.groupSize > 1) {
+            final String message = hoverSlot.extended ? "itempanel.collapsed.hint.collapse"
+                    : "itempanel.collapsed.hint.expand";
+            hotkeys.put(
+                    NEIClientUtils.getKeyName(NEIClientUtils.ALT_HASH, NEIMouseUtils.MOUSE_BTN_LMB),
+                    NEIClientUtils.translate(message, hoverSlot.groupSize));
+        }
+
+        return super.handleHotkeys(mousex, mousey, hotkeys);
+    }
+
+    public boolean containsWithSubpanels(int px, int py) {
+        return contains(px, py) || NEIClientConfig.showHistoryPanelWidget() && this.historyPanel.contains(px, py)
+                || NEIClientConfig.showCraftablesPanelWidget() && this.craftablesPanel.contains(px, py);
+    }
+
 }

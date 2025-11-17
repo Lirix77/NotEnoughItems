@@ -24,8 +24,8 @@ public class DefaultStackStringifyHandler implements IStackStringifyHandler {
         nbTag.setInteger("Count", saveStackSize ? stack.stackSize : 1);
         nbTag.setShort("Damage", (short) stack.getItemDamage());
 
-        if (stack.hasTagCompound()) {
-            nbTag.setTag("tag", stack.getTagCompound());
+        if (stack.hasTagCompound() && !stack.getTagCompound().hasNoTags()) {
+            nbTag.setTag("tag", stack.getTagCompound().copy());
         }
 
         return nbTag;
@@ -55,4 +55,5 @@ public class DefaultStackStringifyHandler implements IStackStringifyHandler {
 
         return fluidStack;
     }
+
 }

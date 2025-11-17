@@ -1,20 +1,16 @@
 package codechicken.nei.recipe;
 
-import static codechicken.lib.gui.GuiDraw.changeTexture;
-import static codechicken.lib.gui.GuiDraw.drawTexturedModalRect;
-import static codechicken.lib.gui.GuiDraw.getMousePosition;
-
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -32,10 +28,8 @@ import org.lwjgl.opengl.GL11;
 
 import com.google.common.base.Stopwatch;
 
-import codechicken.lib.vec.Rectangle4i;
+import codechicken.lib.gui.GuiDraw;
 import codechicken.nei.ItemList;
-import codechicken.nei.ItemList.AllMultiItemFilter;
-import codechicken.nei.LayoutManager;
 import codechicken.nei.NEIClientConfig;
 import codechicken.nei.NEIClientUtils;
 import codechicken.nei.NEIServerUtils;
@@ -44,11 +38,10 @@ import codechicken.nei.api.DefaultOverlayRenderer;
 import codechicken.nei.api.IOverlayHandler;
 import codechicken.nei.api.IRecipeOverlayRenderer;
 import codechicken.nei.api.IStackPositioner;
-import codechicken.nei.api.ItemFilter;
-import codechicken.nei.api.ItemInfo;
 import codechicken.nei.guihook.GuiContainerManager;
 import codechicken.nei.guihook.IContainerInputHandler;
 import codechicken.nei.guihook.IContainerTooltipHandler;
+import cpw.mods.fml.common.FMLLog;
 
 /**
  * A Template Recipe Handler! How about that. Because it was sooo hard, and more seriously required lots of copied code
@@ -112,10 +105,15 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
     }
 
     private static FurnaceRecipeHandler.FuelPair identifyFuel(final ItemStack itemStack) {
-        if (efuels.contains(itemStack.getItem())) return null;
-        final int burnTime = TileEntityFurnace.getItemBurnTime(itemStack);
-        if (burnTime <= 0) return null;
-        return new FurnaceRecipeHandler.FuelPair(itemStack.copy(), burnTime);
+        try {
+            if (efuels.contains(itemStack.getItem())) return null;
+            final int burnTime = TileEntityFurnace.getItemBurnTime(itemStack);
+            if (burnTime <= 0) return null;
+            return new FurnaceRecipeHandler.FuelPair(itemStack.copy(), burnTime);
+        } catch (Exception e) {
+            FMLLog.getLogger().error("NEI: Error identifying fuel for item " + itemStack.getItem());
+            throw e;
+        }
     }
 
     /**
@@ -176,62 +174,16 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
             return null;
         }
 
-        /**
-         * This will perform default cycling of ingredients, mulitItem capable
-         *
-         * @param cycle       Current cycle step
-         * @param ingredients List of ItemStacks to cycle
-         * @return The provided list of ingredients, with their permutations cycled to a different permutation, if one
-         *         is available
-         */
+        @Deprecated
         public List<PositionedStack> getCycledIngredients(int cycle, List<PositionedStack> ingredients) {
-
-            if (!NEIClientUtils.shiftKey() && !disableCycledIngredients) {
-                if (NEIClientConfig.useJEIStyledCycledIngredients()) {
-                    jeiStyledRenderPermutation(ingredients, cycle);
-                } else {
-                    randomRenderPermutation(ingredients, cycle);
-                }
-            }
-
             return ingredients;
         }
 
-        protected void randomRenderPermutation(List<PositionedStack> stacks, long cycle) {
-            final ItemFilter filter = getItemFilter();
-            final int randCycle = Math.abs(new Random(cycle + offset).nextInt());
-
-            for (PositionedStack stack : stacks) {
-                if (stack.items.length <= 1) continue;
-                ArrayList<Integer> filtered = getFilteredIngredientAlternatives(stack, filter);
-                if (filtered.isEmpty()) {
-                    stack.setPermutationToRender((int) (randCycle % stack.items.length));
-                } else {
-                    stack.setPermutationToRender(filtered.get((int) (randCycle % filtered.size())));
-                }
-            }
-
-        }
-
-        protected void jeiStyledRenderPermutation(List<PositionedStack> stacks, long cycle) {
-            final ItemFilter filter = getItemFilter();
-
-            for (PositionedStack stack : stacks) {
-                if (stack.items.length <= 1) continue;
-                ArrayList<Integer> filtered = getFilteredIngredientAlternatives(stack, filter);
-                if (filtered.isEmpty()) {
-                    stack.setPermutationToRender((int) (cycle % stack.items.length));
-                } else {
-                    stack.setPermutationToRender(filtered.get((int) (cycle % filtered.size())));
-                }
-            }
-        }
+        @Deprecated
+        public void randomRenderPermutation(List<PositionedStack> stacks, long cycle) {}
 
         @Deprecated
-        protected void randomRenderPermutation(PositionedStack stack, long cycle) {
-            Random rand = new Random(cycle + offset);
-            stack.setPermutationToRender((int) (Math.abs(rand.nextInt()) % stack.items.length));
-        }
+        public void randomRenderPermutation(PositionedStack stack, long cycle) {}
 
         public void setIngredientPermutation(Collection<PositionedStack> ingredients, ItemStack ingredient) {
             for (PositionedStack stack : ingredients) {
@@ -311,7 +263,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
     public static class RecipeTransferRectHandler implements IContainerInputHandler, IContainerTooltipHandler {
 
-        private static final HashMap<Class<? extends GuiContainer>, HashSet<RecipeTransferRect>> guiMap = new HashMap<>();
+        private static final Map<Class<? extends GuiContainer>, HashSet<RecipeTransferRect>> guiMap = new ConcurrentHashMap<>();
 
         public static void registerRectsToGuis(List<Class<? extends GuiContainer>> classes,
                 List<RecipeTransferRect> rects) {
@@ -423,30 +375,9 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
      */
     public LinkedList<RecipeTransferRect> transferRects = new LinkedList<>();
 
-    public static boolean disableCycledIngredients = true;
-
     public TemplateRecipeHandler() {
         loadTransferRects();
         RecipeTransferRectHandler.registerRectsToGuis(getRecipeTransferRectGuis(), transferRects);
-    }
-
-    protected static ItemFilter getItemFilter() {
-        return new AllMultiItemFilter(
-                item -> !ItemInfo.hiddenItems.contains(item),
-                LayoutManager.presetsPanel != null ? LayoutManager.presetsPanel.getFilter() : null,
-                GuiRecipe.searchField != null ? GuiRecipe.searchField.getFilter() : null);
-    }
-
-    protected static ArrayList<Integer> getFilteredIngredientAlternatives(PositionedStack stack, ItemFilter filter) {
-        final ArrayList<Integer> filtered = new ArrayList<>();
-
-        for (int i = 0; i < stack.items.length; i++) {
-            if (filter.matches(stack.items[i])) {
-                filtered.add(i);
-            }
-        }
-
-        return filtered;
     }
 
     /**
@@ -552,16 +483,16 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
         switch (direction) {
             case 0: // right
-                drawTexturedModalRect(x, y, tx, ty, var, h);
+                GuiDraw.drawTexturedModalRect(x, y, tx, ty, var, h);
                 break;
             case 1: // down
-                drawTexturedModalRect(x, y, tx, ty, w, var);
+                GuiDraw.drawTexturedModalRect(x, y, tx, ty, w, var);
                 break;
             case 2: // left
-                drawTexturedModalRect(x + w - var, y, tx + w - var, ty, var, h);
+                GuiDraw.drawTexturedModalRect(x + w - var, y, tx + w - var, ty, var, h);
                 break;
             case 3: // up
-                drawTexturedModalRect(x, y + h - var, tx, ty + h - var, w, var);
+                GuiDraw.drawTexturedModalRect(x, y + h - var, tx, ty + h - var, w, var);
                 break;
         }
     }
@@ -594,7 +525,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
             // available
             // This will ideally have been pre-cached elsewhere and will be a NOOP
             findFuelsOnce();
-            return getClass().newInstance();
+            return getClass().getConstructor().newInstance();
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -649,14 +580,14 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
     public void drawBackground(int recipe) {
         GL11.glColor4f(1, 1, 1, 1);
-        changeTexture(getGuiTexture());
-        drawTexturedModalRect(0, 0, 5, 11, 166, 65);
+        GuiDraw.changeTexture(getGuiTexture());
+        GuiDraw.drawTexturedModalRect(0, 0, 5, 11, 166, 65);
     }
 
     public void drawForeground(int recipe) {
         GL11.glColor4f(1, 1, 1, 1);
         GL11.glDisable(GL11.GL_LIGHTING);
-        changeTexture(getGuiTexture());
+        GuiDraw.changeTexture(getGuiTexture());
         drawExtras(recipe);
     }
 
@@ -677,7 +608,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
     }
 
     public void onUpdate() {
-        if (!NEIClientUtils.shiftKey()) cycleticks++;
+        cycleticks++;
     }
 
     public boolean hasOverlay(GuiContainer gui, Container container, int recipe) {
@@ -697,13 +628,8 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
     }
 
     @Override
-    public int recipiesPerPage() {
-        return 2;
-    }
-
-    @Override
     public List<String> handleTooltip(GuiRecipe<?> gui, List<String> currenttip, int recipe) {
-        if (GuiContainerManager.shouldShowTooltip(gui) && currenttip.size() == 0) {
+        if (GuiContainerManager.shouldShowTooltip(gui) && currenttip.isEmpty()) {
             Point offset = gui.getRecipePosition(recipe);
             currenttip = transferRectTooltip(gui, transferRects, offset.x, offset.y, currenttip);
         }
@@ -741,58 +667,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
     @Override
     public boolean mouseScrolled(GuiRecipe<?> gui, int scroll, int recipe) {
-        if (!NEIClientUtils.shiftKey()) return false;
-
-        final Point pos = getMousePosition();
-        final Point offset = gui.getRecipePosition(recipe);
-        final Point relMouse = new Point(pos.x - gui.guiLeft - offset.x, pos.y - gui.guiTop - offset.y);
-        final PositionedStack overStack = getIngredientMouseOver(relMouse.x, relMouse.y, recipe);
-
-        if (overStack != null && overStack.items.length > 1) {
-            final ItemFilter filter = getItemFilter();
-
-            if (NEIClientConfig.useJEIStyledCycledIngredients()) {
-                ItemStack stack = overStack.item;
-                for (PositionedStack pStack : getIngredientStacks(recipe)) {
-                    shiftPermutationToRender(pStack, stack, scroll, filter);
-                }
-            } else {
-                shiftPermutationToRender(overStack, overStack.item, scroll, filter);
-            }
-
-            return true;
-        }
-
         return false;
-    }
-
-    private void shiftPermutationToRender(PositionedStack pStack, ItemStack stack, int scroll, ItemFilter filter) {
-
-        for (int index = 0; index < pStack.items.length; index++) {
-            if (NEIServerUtils.areStacksSameTypeCraftingWithNBT(pStack.items[index], stack)) {
-                ArrayList<Integer> filtered = getFilteredIngredientAlternatives(pStack, filter);
-
-                if (filtered.isEmpty()) {
-                    pStack.setPermutationToRender((int) ((pStack.items.length + scroll + index) % pStack.items.length));
-                } else {
-                    pStack.setPermutationToRender(
-                            filtered.get((int) ((filtered.size() + scroll + index) % filtered.size())));
-                }
-
-                break;
-            }
-        }
-    }
-
-    private PositionedStack getIngredientMouseOver(int mousex, int mousey, int recipe) {
-
-        for (PositionedStack pStack : getIngredientStacks(recipe)) {
-            if ((new Rectangle4i(pStack.relx, pStack.rely, 18, 18)).contains(mousex, mousey)) {
-                return pStack;
-            }
-        }
-
-        return null;
     }
 
     private boolean transferRect(GuiRecipe<?> gui, int recipe, boolean usage) {
@@ -802,7 +677,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
     private static boolean transferRect(GuiContainer gui, Collection<RecipeTransferRect> transferRects, int offsetx,
             int offsety, boolean usage) {
-        Point pos = getMousePosition();
+        Point pos = GuiDraw.getMousePosition();
         Point relMouse = new Point(pos.x - gui.guiLeft - offsetx, pos.y - gui.guiTop - offsety);
         for (RecipeTransferRect rect : transferRects) {
             if (rect.rect.contains(relMouse) && (usage ? GuiUsageRecipe.openRecipeGui(rect.outputId, rect.results)
@@ -815,7 +690,7 @@ public abstract class TemplateRecipeHandler implements ICraftingHandler, IUsageH
 
     private static List<String> transferRectTooltip(GuiContainer gui, Collection<RecipeTransferRect> transferRects,
             int offsetx, int offsety, List<String> currenttip) {
-        Point pos = getMousePosition();
+        Point pos = GuiDraw.getMousePosition();
         Point relMouse = new Point(pos.x - gui.guiLeft - offsetx, pos.y - gui.guiTop - offsety);
         for (RecipeTransferRect rect : transferRects) {
             if (rect.rect.contains(relMouse)) {

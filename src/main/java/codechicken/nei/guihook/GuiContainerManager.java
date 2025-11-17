@@ -4,15 +4,20 @@ import static codechicken.lib.gui.GuiDraw.drawMultilineTip;
 import static codechicken.lib.gui.GuiDraw.fontRenderer;
 import static codechicken.lib.gui.GuiDraw.getMousePosition;
 import static codechicken.lib.gui.GuiDraw.renderEngine;
+import static codechicken.nei.NEIClientUtils.translate;
 
 import java.awt.Point;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.StringJoiner;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
@@ -20,8 +25,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.inventory.GuiContainer;
+import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.Tessellator;
 import net.minecraft.client.renderer.entity.RenderItem;
+import net.minecraft.client.resources.IResourceManager;
+import net.minecraft.client.resources.IResourceManagerReloadListener;
+import net.minecraft.client.resources.SimpleReloadableResourceManager;
 import net.minecraft.init.Blocks;
 import net.minecraft.inventory.Slot;
 import net.minecraft.item.ItemStack;
@@ -34,12 +43,30 @@ import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 
 import codechicken.lib.gui.GuiDraw;
+import codechicken.nei.ItemList;
+import codechicken.nei.ItemStackSet;
 import codechicken.nei.NEIClientConfig;
 import codechicken.nei.NEIClientUtils;
+import codechicken.nei.NEIModContainer;
 import codechicken.nei.recipe.StackInfo;
+import codechicken.nei.util.ItemUntranslator;
 import codechicken.nei.util.ReadableNumberConverter;
+import codechicken.nei.util.RenderTooltipEventHelper;
 
 public class GuiContainerManager {
+
+    private static class ResourcePackReloaded implements IResourceManagerReloadListener {
+
+        @Override
+        public void onResourceManagerReload(IResourceManager p_110549_1_) {
+            renderingErrorItems.clear();
+            ItemList.loadItems.restart();
+
+            if (NEIClientConfig.enableItemUntranslator()) {
+                ItemUntranslator.getInstance().load();
+            }
+        }
+    }
 
     public GuiContainer window;
 
@@ -54,6 +81,9 @@ public class GuiContainerManager {
             new CopyOnWriteArrayList<>());
     public static final LinkedList<IContainerSlotClickHandler> slotClickHandlers = new HideousLinkedList<>(
             new CopyOnWriteArrayList<>());
+
+    // Any item rendered with this z offset should render it on top of every other gui element
+    public static final int TOOLTIP_Z_OFFSET = 400;
 
     static {
         addSlotClickHandler(new DefaultSlotClickHandler());
@@ -139,13 +169,15 @@ public class GuiContainerManager {
             namelist = stack.getTooltip(
                     Minecraft.getMinecraft().thePlayer,
                     includeHandlers && Minecraft.getMinecraft().gameSettings.advancedItemTooltips);
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+            namelist = new ArrayList<>();
+        }
 
-        if (namelist == null) namelist = new ArrayList<>();
-
-        if (namelist.size() == 0) namelist.add("Unnamed");
-
-        if (namelist.get(0) == null || namelist.get(0).equals("")) namelist.set(0, "Unnamed");
+        if (namelist.isEmpty()) {
+            namelist.add("Unnamed");
+        } else if (namelist.get(0) == null || namelist.get(0).isEmpty()) {
+            namelist.set(0, "Unnamed");
+        }
         try {
             if (includeHandlers) {
                 for (IContainerTooltipHandler handler : tooltipHandlers) {
@@ -157,7 +189,11 @@ public class GuiContainerManager {
         namelist.set(0, stack.getRarity().rarityColor.toString() + namelist.get(0));
 
         for (int i = 1; i < namelist.size(); i++) {
-            namelist.set(i, EnumChatFormatting.GRAY + namelist.get(i) + EnumChatFormatting.RESET);
+            if (namelist.get(i) == null) {
+                namelist.set(i, "");
+            } else if (!namelist.get(i).startsWith(GuiDraw.TOOLTIP_HANDLER)) {
+                namelist.set(i, EnumChatFormatting.GRAY + namelist.get(i) + EnumChatFormatting.RESET);
+            }
         }
 
         return namelist;
@@ -189,15 +225,15 @@ public class GuiContainerManager {
 
     @Nullable
     public static String itemCountDetails(ItemStack stack) {
-        FluidStack fluid = StackInfo.getFluid(stack);
+        final FluidStack fluid = StackInfo.getFluid(stack);
         if (fluid != null) {
             return fluidAmountDetails(fluid.amount * Math.max(1, stack.stackSize));
         } else {
             return countDetails(
                     stack.stackSize,
                     stack.getMaxStackSize(),
-                    "Count: %s = %s * %s + %s",
-                    "Count: %s = %s * %s");
+                    translate("inventory.tooltip.count.item", "%s = %s * %s + %s"),
+                    translate("inventory.tooltip.count.item", "%s = %s * %s"));
         }
     }
 
@@ -209,7 +245,11 @@ public class GuiContainerManager {
 
     @Nullable
     public static String fluidAmountDetails(int amount) {
-        return countDetails(amount, 144, "Amount: %s L = %s * %s L + %s L", "Amount: %s L = %s * %s L");
+        return countDetails(
+                amount,
+                144,
+                translate("inventory.tooltip.count.fluid", "%s L = %s * %s L + %s L"),
+                translate("inventory.tooltip.count.fluid", "%s L = %s * %s L"));
     }
 
     /**
@@ -219,8 +259,17 @@ public class GuiContainerManager {
      * @return The first line of the multiline display name.
      */
     public static String itemDisplayNameShort(ItemStack itemstack) {
-        List<String> list = itemDisplayNameMultiline(itemstack, null, false);
-        return list.get(0);
+
+        try {
+            List<String> namelist = itemstack.getTooltip(Minecraft.getMinecraft().thePlayer, false);
+
+            if (!namelist.isEmpty() && !"".equals(namelist.get(0))) {
+                return itemstack.getRarity().rarityColor.toString() + namelist.get(0) + EnumChatFormatting.RESET;
+            }
+
+        } catch (Throwable ignored) {}
+
+        return "Unnamed";
     }
 
     /**
@@ -230,102 +279,78 @@ public class GuiContainerManager {
      * @param itemstack The stack to get the name for
      * @return The multiline display name of this item separated by '#'
      */
+    @Deprecated
     public static String concatenatedDisplayName(ItemStack itemstack, boolean includeHandlers) {
         List<String> list = itemDisplayNameMultiline(itemstack, null, includeHandlers);
-        StringBuilder sb = new StringBuilder();
-        boolean first = true;
+        StringJoiner sb = new StringJoiner("#");
+
         for (String name : list) {
-            if (first) {
-                first = false;
-            } else {
-                sb.append("#");
+            if (!name.isEmpty()) {
+                sb.add(name);
             }
-            sb.append(name);
         }
+
         return EnumChatFormatting.getTextWithoutFormattingCodes(sb.toString());
     }
 
-    public static void drawItem(int i, int j, ItemStack itemstack) {
-        drawItem(i, j, itemstack, false);
+    public static void drawItem(int offsetX, int offsetY, ItemStack itemstack) {
+        drawItem(offsetX, offsetY, itemstack, false);
     }
 
-    public static void drawItem(int i, int j, ItemStack itemstack, boolean smallAmount) {
-        drawItem(i, j, itemstack, smallAmount, null);
+    public static void drawItem(int offsetX, int offsetY, ItemStack itemstack, boolean smallAmount) {
+        drawItem(offsetX, offsetY, itemstack, smallAmount, null);
     }
 
-    public static void drawItem(int i, int j, ItemStack itemstack, boolean smallAmount, String stackSize) {
-        drawItem(i, j, itemstack, getFontRenderer(itemstack), smallAmount, stackSize);
+    public static void drawItem(int offsetX, int offsetY, ItemStack itemstack, boolean smallAmount, String quantity) {
+        drawItem(offsetX, offsetY, itemstack, getFontRenderer(itemstack), smallAmount, quantity);
     }
 
-    public static void drawItem(int i, int j, ItemStack itemstack, FontRenderer fontRenderer) {
-        drawItem(i, j, itemstack, fontRenderer, false, null);
+    public static void drawItem(int offsetX, int offsetY, ItemStack itemstack, FontRenderer fontRenderer) {
+        drawItem(offsetX, offsetY, itemstack, fontRenderer, false, null);
     }
 
     private static int modelviewDepth = -1;
-    private static final HashSet<String> stackTraces = new HashSet<>();
+    private static boolean contextEnabled = false;
+    private static final ItemStackSet renderingErrorItems = new ItemStackSet();
 
-    public static void drawItem(int i, int j, ItemStack itemstack, FontRenderer fontRenderer, boolean smallAmount,
-            String stackSize) {
-        enable3DRender();
-        // for lighting correction
-        boolean glRescale = GL11.glGetBoolean(GL12.GL_RESCALE_NORMAL);
+    public static void drawItem(int offsetX, int offsetY, ItemStack itemstack, FontRenderer fontRenderer,
+            boolean smallAmount, String quantity) {
 
-        float zLevel = drawItems.zLevel += 100F;
-        float scale = smallAmount ? 0.5f : 1f;
-
-        try {
-            drawItems.renderItemAndEffectIntoGUI(fontRenderer, renderEngine, itemstack, i, j);
+        safeItemRenderContext(itemstack, offsetX, offsetY, fontRenderer, () -> {
+            float scale = smallAmount ? 0.5f : 1f;
+            String stackSize = quantity;
 
             if (stackSize == null) {
                 if (itemstack.stackSize > 1) {
-                    stackSize = ReadableNumberConverter.INSTANCE.toWideReadableForm(itemstack.stackSize);
 
-                    if (stackSize.length() == 3) {
-                        scale = 0.8f;
-                    } else if (stackSize.length() == 4) {
-                        scale = 0.6f;
-                    } else if (stackSize.length() > 4) {
-                        scale = 0.5f;
+                    if (NEIClientConfig.getBooleanSetting("inventory.dynamicFontSize")) {
+                        stackSize = ReadableNumberConverter.INSTANCE.toWideReadableForm(itemstack.stackSize);
+
+                        if (stackSize.length() == 3) {
+                            scale = 0.8f;
+                        } else if (stackSize.length() == 4) {
+                            scale = 0.6f;
+                        } else if (stackSize.length() > 4) {
+                            scale = 0.5f;
+                        }
+                    } else {
+                        stackSize = String.valueOf(itemstack.stackSize);
                     }
 
                 } else {
                     stackSize = "";
                 }
-
             }
 
-            if (scale != 1f) {
+            drawItems.renderItemAndEffectIntoGUI(fontRenderer, renderEngine, itemstack, offsetX, offsetY);
 
-                if (!stackSize.isEmpty()) {
-                    drawBigStackSize(i, j, stackSize, scale);
-                }
-
-                // stackSize = "". it needed for correct draw item with alpha and blend
-                drawItems.renderItemOverlayIntoGUI(fontRenderer, renderEngine, itemstack, i, j, "");
-            } else {
-                drawItems.renderItemOverlayIntoGUI(fontRenderer, renderEngine, itemstack, i, j, stackSize);
+            if (scale != 1f && !stackSize.isEmpty()) {
+                drawBigStackSize(offsetX, offsetY, stackSize, scale);
+                stackSize = "";
             }
 
-            if (!checkMatrixStack()) throw new IllegalStateException("Modelview matrix stack too deep");
-            if (Tessellator.instance.isDrawing) throw new IllegalStateException("Still drawing");
-        } catch (Exception e) {
-            NEIClientUtils.reportErrorBuffered(e, stackTraces, itemstack);
-
-            restoreMatrixStack();
-            if (Tessellator.instance.isDrawing) Tessellator.instance.draw();
-
-            drawItems.zLevel = zLevel;
-            drawItems.renderItemIntoGUI(fontRenderer, renderEngine, new ItemStack(Blocks.fire), i, j);
-        }
-
-        if (glRescale) {
-            GL11.glEnable(GL12.GL_RESCALE_NORMAL);
-        } else {
-            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
-        }
-
-        enable2DRender();
-        drawItems.zLevel = zLevel - 100;
+            drawItems.renderItemOverlayIntoGUI(fontRenderer, renderEngine, itemstack, offsetX, offsetY, stackSize);
+        });
     }
 
     // copy from appeng.client.render.AppEngRenderItem
@@ -335,21 +360,66 @@ public class GuiContainerManager {
         enable2DRender();
         GL11.glScaled(scale, scale, scale);
 
-        final int X = (int) (((float) offsetX + 16.0f - fontRenderer.getStringWidth(stackSize) * scale)
-                * inverseScaleFactor);
-        final int Y = (int) (((float) offsetY + 16.0f - 7.0f * scale) * inverseScaleFactor);
+        final int X = (int) ((offsetX + 16.0f - fontRenderer.getStringWidth(stackSize) * scale) * inverseScaleFactor);
+        final int Y = (int) ((offsetY + 16.0f - 7.0f * scale) * inverseScaleFactor);
         fontRenderer.drawStringWithShadow(stackSize, X, Y, 16777215);
 
         GL11.glScaled(inverseScaleFactor, inverseScaleFactor, inverseScaleFactor);
         enable3DRender();
     }
 
+    private static void safeItemRenderContext(ItemStack stack, int x, int y, FontRenderer fontRenderer,
+            Runnable callback) {
+        float zLevel = drawItems.zLevel += 100F;
+        enableMatrixStackLogging();
+        enable3DRender();
+
+        try {
+            if (renderingErrorItems.contains(stack)) {
+                drawItems.renderItemIntoGUI(fontRenderer, renderEngine, new ItemStack(Blocks.fire), x, y);
+            } else {
+                callback.run();
+            }
+
+            if (!checkMatrixStack()) throw new IllegalStateException("Modelview matrix stack too deep");
+            if (Tessellator.instance.isDrawing) throw new IllegalStateException("Still drawing");
+        } catch (Exception e) {
+            System.err.println("Error while rendering: " + stack + " (" + e.getMessage() + ")");
+            e.printStackTrace();
+
+            restoreMatrixStack();
+            if (Tessellator.instance.isDrawing) Tessellator.instance.draw();
+
+            drawItems.zLevel = zLevel;
+            drawItems.renderItemIntoGUI(fontRenderer, renderEngine, new ItemStack(Blocks.fire), x, y);
+            renderingErrorItems.add(stack);
+        }
+
+        enable2DRender();
+        disableMatrixStackLogging();
+        drawItems.zLevel = zLevel - 100;
+    }
+
+    public static void registerReloadResourceListener() {
+        if (Minecraft.getMinecraft().getResourceManager() instanceof SimpleReloadableResourceManager manager) {
+            manager.registerReloadListener(new ResourcePackReloaded());
+        }
+    }
+
     public static void enableMatrixStackLogging() {
-        modelviewDepth = GL11.glGetInteger(GL11.GL_MODELVIEW_STACK_DEPTH);
+        if (!contextEnabled) {
+            GL11.glPushAttrib(GL11.GL_ENABLE_BIT | GL11.GL_COLOR_BUFFER_BIT | GL11.GL_LIGHTING_BIT);
+            modelviewDepth = GL11.glGetInteger(GL11.GL_MODELVIEW_STACK_DEPTH);
+            contextEnabled = true;
+        }
     }
 
     public static void disableMatrixStackLogging() {
-        modelviewDepth = -1;
+        if (contextEnabled) {
+            contextEnabled = false;
+            modelviewDepth = -1;
+            GL11.glPopAttrib();
+        }
     }
 
     public static boolean checkMatrixStack() {
@@ -380,9 +450,9 @@ public class GuiContainerManager {
 
     public GuiContainerManager(GuiContainer screen) {
         window = screen;
-        if (screen instanceof IContainerTooltipHandler) {
+        if (screen instanceof IContainerTooltipHandler tooltipHandler) {
             instanceTooltipHandlers = Collections.synchronizedList(new LinkedList<>());
-            instanceTooltipHandlers.add((IContainerTooltipHandler) screen);
+            instanceTooltipHandlers.add(tooltipHandler);
             instanceTooltipHandlers.addAll(tooltipHandlers);
         } else instanceTooltipHandlers = tooltipHandlers;
     }
@@ -515,56 +585,216 @@ public class GuiContainerManager {
 
     public void renderToolTips(int mousex, int mousey) {
         try {
-            List<String> tooltip = new LinkedList<>();
-            FontRenderer font = GuiDraw.fontRenderer;
+        List<String> tooltip = new LinkedList<>();
+        FontRenderer font = GuiDraw.fontRenderer;
+
+        synchronized (instanceTooltipHandlers) {
+            for (IContainerTooltipHandler handler : instanceTooltipHandlers)
+                tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
+        }
+
+        ItemStack stack = getStackMouseOver(window);
+        boolean showTooltip = shouldShowTooltip(window);
+        if (tooltip.isEmpty() && showTooltip) { // mouseover tip, not holding an item
+            font = getFontRenderer(stack);
+            if (stack != null) {
+                tooltip = itemDisplayNameMultiline(stack, window, true);
+                applyItemCountDetails(tooltip, stack);
+            }
 
             synchronized (instanceTooltipHandlers) {
                 for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                    tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
+                    tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
+            }
+        }
+
+        if (showTooltip && NEIClientConfig.getBooleanSetting("inventory.showHotkeys")) {
+            List<String> hotkeystips = collectHotkeyTips(mousex, mousey);
+
+            if (!hotkeystips.isEmpty()) {
+
+                if (tooltip.isEmpty()) {
+                    tooltip.addAll(hotkeystips);
+                } else {
+                    tooltip.addAll(1, hotkeystips);
+                }
+            }
+        }
+
+        if (showTooltip && stack != null && !tooltip.isEmpty()) {
+            final String secondDisplayName = ItemUntranslator.getInstance().getItemStackDisplayName(stack);
+
+            if (!secondDisplayName.isEmpty()) {
+                tooltip.add(1, EnumChatFormatting.DARK_GRAY + secondDisplayName + GuiDraw.TOOLTIP_LINESPACE);
+            } else {
+                tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE);
             }
 
-            if (tooltip.isEmpty() && shouldShowTooltip(window)) { // mouseover tip, not holding an item
-                ItemStack stack = getStackMouseOver(window);
-                font = getFontRenderer(stack);
-                if (stack != null) {
-                    tooltip = itemDisplayNameMultiline(stack, window, true);
-                    applyItemCountDetails(tooltip, stack);
-                }
+        } else if (!tooltip.isEmpty()) {
+            tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE);
+        }
 
-                synchronized (instanceTooltipHandlers) {
-                    for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                        tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
-                }
+        if (NEIModContainer.isGTNHLibLoaded() && !tooltip.isEmpty()) {
+            if (RenderTooltipEventHelper.post(stack, this.window, mousex, mousey, font)) {
+                return;
             }
-
-            if (tooltip.size() > 0)
-                tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE); // add space after 'title'
-
+            Consumer<List<String>> alternativeRenderer = RenderTooltipEventHelper.getAlternativeRenderer();
+            if (alternativeRenderer == null) {
+                drawPagedTooltip(
+                        RenderTooltipEventHelper.getFont(),
+                        RenderTooltipEventHelper.getX() + 12,
+                        RenderTooltipEventHelper.getY() - 12,
+                        tooltip);
+            } else {
+                GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+                RenderHelper.disableStandardItemLighting();
+                GL11.glDisable(GL11.GL_DEPTH_TEST);
+                GuiDraw.gui.incZLevel(300.0f);
+                alternativeRenderer.accept(tooltip);
+                GuiDraw.gui.incZLevel(-300.0f);
+                GL11.glEnable(GL11.GL_DEPTH_TEST);
+                RenderHelper.enableStandardItemLighting();
+                GL11.glEnable(GL12.GL_RESCALE_NORMAL);
+            }
+            RenderTooltipEventHelper.flush();
+        } else {
             drawPagedTooltip(font, mousex + 12, mousey - 12, tooltip);
-
-            for (IContainerDrawHandler drawHandler : drawHandlers) {
-                drawHandler.postRenderTooltips(window, mousex, mousey, tooltip);
-            }
+        }
         } catch (Throwable e) {
             e.printStackTrace();
         }
+
+    }
+
+    private List<String> collectHotkeyTips(int mousex, int mousey) {
+
+        if (NEIClientUtils.altKey()) {
+            Map<String, String> hotkeys = new HashMap<>();
+
+            synchronized (instanceTooltipHandlers) {
+                for (IContainerTooltipHandler handler : instanceTooltipHandlers) {
+                    hotkeys = handler.handleHotkeys(window, mousex, mousey, hotkeys);
+                }
+            }
+
+            hotkeys.remove(null);
+            hotkeys.remove("");
+
+            if (!hotkeys.isEmpty()) {
+                List<String> hotkeystips = new ArrayList<>();
+                Map<String, List<String>> messages = new HashMap<>();
+
+                for (Map.Entry<String, String> entry : hotkeys.entrySet()) {
+                    messages.computeIfAbsent(entry.getValue(), m -> new ArrayList<>()).add(entry.getKey());
+                }
+
+                for (List<String> keys : messages.values()) {
+                    Collections.sort(keys, (a, b) -> {
+                        if (a.length() != b.length()) {
+                            return Integer.compare(a.length(), b.length());
+                        }
+                        return a.compareTo(b);
+                    });
+                }
+
+                messages.entrySet().stream().sorted((a, b) -> {
+                    String sa = String.join("/", a.getValue());
+                    String sb = String.join("/", b.getValue());
+
+                    if (sa.length() != sb.length()) {
+                        return Integer.compare(sa.length(), sb.length());
+                    }
+
+                    return sa.compareTo(sb);
+                }).map(entry -> getHotkeyTip(entry.getValue(), entry.getKey()))
+                        .collect(Collectors.toCollection(() -> hotkeystips));
+
+                hotkeystips.set(
+                        hotkeystips.size() - 1,
+                        hotkeystips.get(hotkeystips.size() - 1) + GuiDraw.TOOLTIP_LINESPACE);
+
+                return hotkeystips;
+            }
+
+        } else if (NEIClientConfig.getBooleanSetting("inventory.hotkeysHelpText")) {
+            Map<String, String> hotkeys = new HashMap<>();
+            boolean existsHotkeys = false;
+
+            synchronized (instanceTooltipHandlers) {
+                for (IContainerTooltipHandler handler : instanceTooltipHandlers) {
+                    if (!(hotkeys = handler.handleHotkeys(window, mousex, mousey, hotkeys)).isEmpty()) {
+                        hotkeys.remove("");
+                        hotkeys.remove(null);
+
+                        if (!hotkeys.isEmpty()) {
+                            existsHotkeys = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (existsHotkeys) {
+                return Collections.singletonList(
+                        EnumChatFormatting.GRAY + translate(
+                                "showHotkeys",
+                                EnumChatFormatting.GOLD + translate("key.alt") + EnumChatFormatting.GRAY));
+            }
+        }
+
+        return Collections.emptyList();
+    }
+
+    private String getHotkeyTip(List<String> keys, String message) {
+        return EnumChatFormatting.GOLD
+                + String.join(EnumChatFormatting.DARK_GRAY + " / " + EnumChatFormatting.GOLD, keys)
+                + EnumChatFormatting.DARK_GRAY
+                + " - "
+                + EnumChatFormatting.GRAY
+                + message
+                + EnumChatFormatting.RESET;
     }
 
     private static int tooltipPage;
+    private static int maxTooltipPage;
 
     public static void drawPagedTooltip(FontRenderer font, int x, int y, List<String> list) {
         if (list.isEmpty()) return;
         List<List<String>> tooltips = splitTooltipByPage(list);
-        tooltipPage = tooltipPage < tooltips.size() ? tooltipPage : 0;
-        if (tooltips.size() > 1) {
-            tooltips.get(tooltipPage).add(
-                    EnumChatFormatting.ITALIC + NEIClientUtils.translate(
-                            "inventory.tooltip.page",
-                            tooltipPage + 1,
-                            tooltips.size(),
-                            NEIClientConfig.getKeyName(NEIClientConfig.getKeyBinding("gui.next_tooltip"), true)));
+        maxTooltipPage = tooltips.size();
+        tooltipPage = tooltipPage < maxTooltipPage ? tooltipPage : 0;
+        final List<String> currentTooltip = tooltips.get(tooltipPage);
+
+        if (maxTooltipPage > 1) {
+            final String lastLine = currentTooltip.remove(currentTooltip.size() - 1);
+            final String pageTooltip = EnumChatFormatting.ITALIC + NEIClientUtils.translate(
+                    "inventory.tooltip.page",
+                    tooltipPage + 1,
+                    maxTooltipPage,
+                    NEIClientConfig.getKeyName("gui.next_tooltip"));
+
+            if (lastLine.startsWith(GuiDraw.TOOLTIP_HANDLER)) {
+                currentTooltip.add(lastLine);
+            } else {
+                currentTooltip.add(lastLine + GuiDraw.TOOLTIP_LINESPACE);
+            }
+
+            currentTooltip.add(pageTooltip);
         }
-        drawMultilineTip(font, x, y, tooltips.get(tooltipPage));
+
+        if (NEIModContainer.isGTNHLibLoaded()) {
+            drawMultilineTip(
+                    font,
+                    x,
+                    y,
+                    currentTooltip,
+                    RenderTooltipEventHelper.getBackgroundStart(),
+                    RenderTooltipEventHelper.getBackgroundEnd(),
+                    RenderTooltipEventHelper.getBorderStart(),
+                    RenderTooltipEventHelper.getBorderEnd());
+        } else {
+            drawMultilineTip(font, x, y, currentTooltip);
+        }
     }
 
     public static List<List<String>> splitTooltipByPage(List<String> list) {
@@ -576,8 +806,9 @@ public class GuiContainerManager {
             GuiDraw.ITooltipLineHandler line = GuiDraw.getTipLine(text);
             int lineHeight = line != null ? line.getSize().height
                     : text.endsWith(GuiDraw.TOOLTIP_LINESPACE) && i + 1 < list.size() ? 12 : 10;
-            if (height + lineHeight <= GuiDraw.displaySize().height - 8 * 2 - 10) {
+            if (height + lineHeight <= GuiDraw.displaySize().height - 8 * 2 - 10 || tmp.isEmpty()) {
                 // top & bottom 8px + last line for showing page
+                // and at least include one line per page
                 height += lineHeight;
             } else {
                 ret.add(new ArrayList<>(tmp));
@@ -593,6 +824,7 @@ public class GuiContainerManager {
     }
 
     public static boolean shouldShowTooltip(GuiContainer window) {
+        if (window == null) return false;
         for (IContainerObjectHandler handler : objectHandlers) if (!handler.shouldShowTooltip(window)) return false;
 
         return window.mc.thePlayer.inventory.getItemStack() == null;
@@ -608,8 +840,8 @@ public class GuiContainerManager {
         }
     }
 
-    public static void incrementTooltipPage() {
-        tooltipPage++;
+    public static boolean incrementTooltipPage() {
+        return tooltipPage != Math.min(tooltipPage++, maxTooltipPage);
     }
 
     public void renderSlotUnderlay(Slot slot) {
@@ -651,7 +883,7 @@ public class GuiContainerManager {
         if (Keyboard.getEventKeyState() || (k == 0 && Character.isDefined(c))) {
             try {
                 keyTyped(c, k);
-            } catch (java.lang.IndexOutOfBoundsException e) {
+            } catch (IndexOutOfBoundsException e) {
                 System.err.println("Caught out of bounds exception pressing " + c + " " + k);
                 e.printStackTrace();
             }
@@ -674,38 +906,17 @@ public class GuiContainerManager {
      * Delegate for changing item rendering for certain slots. Eg. Shrinking text for large itemstacks
      */
     public void drawSlotItem(Slot slot, ItemStack stack, int x, int y, String quantity) {
-        // for lighting correction
-        boolean glRescale = GL11.glGetBoolean(GL12.GL_RESCALE_NORMAL);
-        float zLevel = drawItems.zLevel += 100F;
 
-        try {
-            if (window instanceof IGuiSlotDraw) {
-                ((IGuiSlotDraw) window).drawSlotItem(slot, stack, x, y, quantity);
-            } else {
-
-                if (quantity == null) {
-                    quantity = stack != null && stack.stackSize > 1 ? String.valueOf(stack.stackSize) : "";
-                }
-
-                drawItems.renderItemAndEffectIntoGUI(fontRenderer, renderEngine, stack, x, y);
-                drawItems.renderItemOverlayIntoGUI(fontRenderer, renderEngine, stack, x, y, quantity);
-            }
-        } catch (Exception e) {
-            NEIClientUtils.reportErrorBuffered(e, stackTraces, stack);
-
-            restoreMatrixStack();
-            if (Tessellator.instance.isDrawing) Tessellator.instance.draw();
-
-            drawItems.zLevel = zLevel;
-            drawItems.renderItemIntoGUI(fontRenderer, renderEngine, new ItemStack(Blocks.fire), x, y);
+        if (window instanceof IGuiSlotDraw) {
+            safeItemRenderContext(
+                    stack,
+                    x,
+                    y,
+                    fontRenderer,
+                    () -> ((IGuiSlotDraw) window).drawSlotItem(slot, stack, x, y, quantity));
+        } else if (stack != null) {
+            drawItem(x, y, stack, false, quantity);
         }
-
-        if (glRescale) {
-            GL11.glEnable(GL12.GL_RESCALE_NORMAL);
-        } else {
-            GL11.glDisable(GL12.GL_RESCALE_NORMAL);
-        }
-        drawItems.zLevel = zLevel - 100;
     }
 
     /**

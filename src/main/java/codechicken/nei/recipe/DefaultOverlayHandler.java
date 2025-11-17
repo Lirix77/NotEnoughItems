@@ -6,29 +6,23 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.entity.player.InventoryPlayer;
 import net.minecraft.inventory.Slot;
+import net.minecraft.inventory.SlotCrafting;
 import net.minecraft.item.ItemStack;
+import net.minecraft.nbt.NBTTagCompound;
 
 import codechicken.lib.inventory.InventoryUtils;
 import codechicken.nei.FastTransferManager;
+import codechicken.nei.NEIClientUtils;
 import codechicken.nei.PositionedStack;
 import codechicken.nei.api.IOverlayHandler;
 
-@SuppressWarnings("rawtypes, unchecked")
 public class DefaultOverlayHandler implements IOverlayHandler {
-
-    public static Class gtItem;
-
-    static {
-        try {
-            gtItem = Class.forName("gregtech.api.items.GT_MetaBase_Item");
-        } catch (ClassNotFoundException ignored) {
-            gtItem = null;
-        }
-    }
 
     public static class DistributedIngred {
 
@@ -41,6 +35,7 @@ public class DefaultOverlayHandler implements IOverlayHandler {
         public int distributed;
         public int numSlots;
         public int recipeAmount;
+        public boolean isContainerItem = false;
     }
 
     public static class IngredientDistribution {
@@ -55,108 +50,218 @@ public class DefaultOverlayHandler implements IOverlayHandler {
         public Slot[] slots;
     }
 
-    public DefaultOverlayHandler(int x, int y) {
-        offsetx = x;
-        offsety = y;
-    }
+    public int offsetx;
+    public int offsety;
 
     public DefaultOverlayHandler() {
         this(5, 11);
     }
 
-    public int offsetx;
-    public int offsety;
+    public DefaultOverlayHandler(int x, int y) {
+        this.offsetx = x;
+        this.offsety = y;
+    }
 
     @Override
-    public void overlayRecipe(GuiContainer gui, IRecipeHandler recipe, int recipeIndex, boolean shift) {
-        List<PositionedStack> ingredients = recipe.getIngredientStacks(recipeIndex);
-        List<DistributedIngred> ingredStacks = getPermutationIngredients(ingredients);
+    public void overlayRecipe(GuiContainer gui, IRecipeHandler handler, int recipeIndex, boolean maxTransfer) {
+        transferRecipe(gui, handler, recipeIndex, maxTransfer ? Integer.MAX_VALUE : 1);
+    }
 
-        if (!clearIngredients(gui, ingredients)) return;
+    @Override
+    public int transferRecipe(GuiContainer gui, IRecipeHandler handler, int recipeIndex, int multiplier) {
+        final List<PositionedStack> ingredients = handler.getIngredientStacks(recipeIndex);
+        final List<DistributedIngred> ingredStacks = getPermutationIngredients(ingredients);
+
+        if (!clearIngredients(gui, handler)) return 0;
 
         findInventoryQuantities(gui, ingredStacks);
 
-        List<IngredientDistribution> assignedIngredients = assignIngredients(ingredients, ingredStacks);
-        if (assignedIngredients == null) return;
+        final List<IngredientDistribution> assignedIngredients = assignIngredients(ingredients, ingredStacks);
+        if (assignedIngredients == null) return 0;
 
         assignIngredSlots(gui, ingredients, assignedIngredients);
-        int quantity = calculateRecipeQuantity(assignedIngredients);
+        multiplier = Math.min(multiplier == 0 ? 64 : multiplier, calculateRecipeQuantity(assignedIngredients));
 
-        if (quantity != 0) moveIngredients(gui, assignedIngredients, quantity);
+        moveIngredients(gui, assignedIngredients, Math.max(1, multiplier));
+
+        return assignedIngredients.stream().anyMatch(distrib -> distrib.distrib.distributed == 0) ? 0 : multiplier;
     }
 
-    @SuppressWarnings("unchecked")
-    private boolean clearIngredients(GuiContainer gui, List<PositionedStack> ingreds) {
-        for (PositionedStack pstack : ingreds) for (Slot slot : (List<Slot>) gui.inventorySlots.inventorySlots)
-            if (slot.xDisplayPosition == pstack.relx + offsetx && slot.yDisplayPosition == pstack.rely + offsety) {
-                if (!slot.getHasStack()) continue;
-
-                FastTransferManager.clickSlot(gui, slot.slotNumber, 0, 1);
-                if (slot.getHasStack()) return false;
-            }
-
+    @Override
+    public boolean canFillCraftingGrid(GuiContainer firstGui, IRecipeHandler handler, int recipeIndex) {
         return true;
     }
 
-    @SuppressWarnings("unchecked")
-    private void moveIngredients(GuiContainer gui, List<IngredientDistribution> assignedIngredients, int quantity) {
-        for (IngredientDistribution distrib : assignedIngredients) {
-            if (distrib.slots.length == 0) continue;
+    @Override
+    public boolean canCraft(GuiContainer firstGui, IRecipeHandler handler, int recipeIndex) {
+        return canFillCraftingGrid(firstGui, handler, recipeIndex)
+                && presenceOverlay(firstGui, handler, recipeIndex).stream().allMatch(state -> state.isPresent());
+    }
 
-            ItemStack pstack = distrib.permutation;
-            int transferCap = quantity * pstack.stackSize;
-            int transferred = 0;
+    @Override
+    public boolean craft(GuiContainer firstGui, IRecipeHandler handler, int recipeIndex, int multiplier) {
+        final Slot craftingSlot = firstGui.inventorySlots.inventorySlots.stream()
+                .filter(slot -> slot instanceof SlotCrafting).findFirst().orElse(null);
 
-            int destSlotIndex = 0;
-            Slot dest = distrib.slots[0];
-            int slotTransferred = 0;
-            int slotTransferCap = pstack.getMaxStackSize();
+        if (craftingSlot == null) {
+            return false;
+        }
 
-            for (Slot slot : (List<Slot>) gui.inventorySlots.inventorySlots) {
-                if (!slot.getHasStack() || !canMoveFrom(slot, gui)) continue;
+        boolean craft = false;
+        while (multiplier > 0) {
+            final int transfer = transferRecipe(firstGui, handler, recipeIndex, multiplier);
 
-                ItemStack stack = slot.getStack();
-                if (!canStack(stack, pstack)) continue;
-
-                int amount = Math.min(transferCap - transferred, stack.stackSize);
-                FastTransferManager.clickSlot(gui, slot.slotNumber);
-                for (int c = 0; c < amount; c++) {
-                    FastTransferManager.clickSlot(gui, dest.slotNumber, 1);
-                    transferred++;
-                    slotTransferred++;
-                    if (slotTransferred >= slotTransferCap) {
-                        destSlotIndex++;
-                        if (destSlotIndex == distrib.slots.length) {
-                            dest = null;
-                            break;
-                        }
-                        dest = distrib.slots[destSlotIndex];
-                        slotTransferred = 0;
-                    }
-                }
-                FastTransferManager.clickSlot(gui, slot.slotNumber);
-                if (transferred >= transferCap || dest == null) break;
+            if (transfer <= 0) {
+                break;
             }
+
+            multiplier -= transfer;
+
+            if (craftingSlot.getHasStack() && craftingSlot.canTakeStack(firstGui.mc.thePlayer)) {
+                FastTransferManager.clickSlot(firstGui, craftingSlot.slotNumber, 0, 1);
+                craft = true;
+            }
+
+        }
+
+        clearIngredients(firstGui, handler);
+
+        return craft;
+    }
+
+    protected boolean clearIngredients(GuiContainer gui, IRecipeHandler handler) {
+
+        for (Slot slot : getCraftMatrixSlots(gui, handler)) {
+            if (slot.canTakeStack(gui.mc.thePlayer)) {
+                FastTransferManager.clickSlot(gui, slot.slotNumber, 0, 1);
+                if (slot.getHasStack()) return false;
+            }
+        }
+
+        FastTransferManager.dropHeldItem(gui);
+
+        return gui.mc.thePlayer.inventory.getItemStack() == null;
+    }
+
+    /**
+     * Gets the slots in the crafting matrix for the given GUI and recipe handler.
+     * 
+     * @param gui
+     * @param handler
+     * @return
+     */
+    protected Set<Slot> getCraftMatrixSlots(GuiContainer gui, IRecipeHandler handler) {
+        final PositionedStack firstIngr = handler.getIngredientStacks(0).get(0);
+        final Map<Integer, Slot> grid = new HashMap<>();
+        final Set<Slot> ingredSlots = new HashSet<>();
+
+        for (Slot slot : gui.inventorySlots.inventorySlots) {
+            final int key = (slot.xDisplayPosition - this.offsetx) * 10_000 + (slot.yDisplayPosition - this.offsety);
+            grid.put(key, slot);
+        }
+
+        int left = firstIngr.relx;
+        int top = firstIngr.rely;
+        int right = left;
+        int bottom = top;
+
+        while (grid.containsKey((left - 18) * 10_000 + firstIngr.rely)) {
+            left -= 18;
+        }
+
+        while (grid.containsKey((right + 18) * 10_000 + firstIngr.rely)) {
+            right += 18;
+        }
+
+        while (grid.containsKey(firstIngr.relx * 10_000 + (top - 18))) {
+            top -= 18;
+        }
+
+        while (grid.containsKey(firstIngr.relx * 10_000 + (bottom + 18))) {
+            bottom += 18;
+        }
+
+        for (int x = left; x <= right; x += 18) {
+            for (int y = top; y <= bottom; y += 18) {
+                final Slot slot = grid.get(x * 10_000 + y);
+                if (slot != null && !(slot.inventory instanceof InventoryPlayer)) {
+                    ingredSlots.add(slot);
+                }
+            }
+        }
+
+        return ingredSlots;
+    }
+
+    private void moveIngredients(GuiContainer gui, List<IngredientDistribution> assignedIngredients, int multiplier) {
+
+        for (Slot slot : gui.inventorySlots.inventorySlots) {
+            if (slot instanceof SlotCrafting || !slot.getHasStack()
+                    || !canMoveFrom(slot, gui)
+                    || !slot.canTakeStack(gui.mc.thePlayer))
+                continue;
+            ItemStack stack = slot.getStack();
+            int slotTransferCap = stack.getMaxStackSize();
+
+            for (IngredientDistribution distrib : assignedIngredients) {
+                if (distrib.slots.length == 0 || !slot.getHasStack() || !canStack(distrib.permutation, stack)) continue;
+                int transferCap = Math.min(slotTransferCap, multiplier * distrib.permutation.stackSize);
+                int stackSize = slot.getStack().stackSize;
+                boolean pickup = false;
+
+                for (Slot dest : distrib.slots) {
+                    int amount = Math
+                            .min(transferCap - (dest.getHasStack() ? dest.getStack().stackSize : 0), stackSize);
+
+                    if (stackSize <= amount) {
+
+                        if (!pickup) {
+                            FastTransferManager.clickSlot(gui, slot.slotNumber);
+                        }
+
+                        FastTransferManager.clickSlot(gui, dest.slotNumber);
+                        break;
+                    } else {
+
+                        for (int c = 0; c < amount; c++) {
+
+                            if (pickup != (pickup = true)) {
+                                FastTransferManager.clickSlot(gui, slot.slotNumber);
+                            }
+
+                            FastTransferManager.clickSlot(gui, dest.slotNumber, 1);
+                            stackSize--;
+                        }
+                    }
+
+                }
+
+                if (gui.mc.thePlayer.inventory.getItemStack() != null) {
+                    FastTransferManager.clickSlot(gui, slot.slotNumber);
+                }
+            }
+
         }
     }
 
     private int calculateRecipeQuantity(List<IngredientDistribution> assignedIngredients) {
         int quantity = Integer.MAX_VALUE;
+
         for (IngredientDistribution distrib : assignedIngredients) {
-            DistributedIngred istack = distrib.distrib;
+            final DistributedIngred istack = distrib.distrib;
+            if (istack.distributed == 0) continue;
             if (istack.numSlots == 0) return 0;
 
             final int maxStackSize = istack.stack.getMaxStackSize();
-            int allSlots = istack.invAmount;
-            if (allSlots / istack.numSlots > maxStackSize) allSlots = istack.numSlots * maxStackSize;
-
-            final int newQuantity = allSlots / istack.distributed;
-            if (maxStackSize == 1) {
+            if (maxStackSize == 1 && istack.isContainerItem) {
                 // If non-stackable, fill up as much as possible of the other ingredients
                 continue;
             }
-            quantity = Math.min(quantity, newQuantity);
+
+            final int allSlots = Math.min(istack.invAmount, istack.numSlots * maxStackSize);
+            quantity = Math.min(quantity, allSlots / istack.distributed);
         }
+
         if (quantity == Integer.MAX_VALUE) {
             // Only possible if all ingredients were non-stackable
             quantity = 1;
@@ -181,7 +286,7 @@ public class DefaultOverlayHandler implements IOverlayHandler {
             assignedSlots.add(new LinkedList<>());
         }
 
-        while (avaliableSlots.size() > 0 && remainingIngreds.size() > 0) {
+        while (!avaliableSlots.isEmpty() && !remainingIngreds.isEmpty()) {
             for (Iterator<Integer> iterator = remainingIngreds.iterator(); iterator.hasNext();) {
                 int i = iterator.next();
                 boolean assigned = false;
@@ -199,8 +304,9 @@ public class DefaultOverlayHandler implements IOverlayHandler {
                     }
                 }
 
-                if (!assigned || istack.numSlots * istack.stack.getMaxStackSize() >= istack.invAmount)
+                if (!assigned || istack.numSlots * istack.stack.getMaxStackSize() >= istack.invAmount) {
                     iterator.remove();
+                }
             }
         }
 
@@ -235,8 +341,10 @@ public class DefaultOverlayHandler implements IOverlayHandler {
                 }
             }
 
-            if (biggestIngred == null) // not enough ingreds
-                return null;
+            if (biggestIngred == null) {
+                biggestIngred = new DistributedIngred(posstack.item);
+                permutation = InventoryUtils.copyStack(posstack.item, 0);
+            }
 
             biggestIngred.distributed += permutation.stackSize;
             assignedIngredients.add(new IngredientDistribution(biggestIngred, permutation));
@@ -245,13 +353,34 @@ public class DefaultOverlayHandler implements IOverlayHandler {
         return assignedIngredients;
     }
 
-    @SuppressWarnings("unchecked")
     private void findInventoryQuantities(GuiContainer gui, List<DistributedIngred> ingredStacks) {
-        for (Slot slot : (List<Slot>) gui.inventorySlots.inventorySlots) /* work out how much we have to go round */ {
+        for (Slot slot : gui.inventorySlots.inventorySlots) /* work out how much we have to go round */ {
             if (slot.getHasStack() && canMoveFrom(slot, gui)) {
-                ItemStack pstack = slot.getStack();
-                DistributedIngred istack = findIngred(ingredStacks, pstack);
-                if (istack != null) istack.invAmount += pstack.stackSize;
+                final ItemStack pstack = slot.getStack();
+                final DistributedIngred istack = findIngred(ingredStacks, pstack);
+
+                if (istack != null) {
+                    istack.invAmount += pstack.stackSize;
+
+                    if (!istack.isContainerItem && pstack.getMaxStackSize() == 1
+                            && pstack.getItem().hasContainerItem(pstack)) {
+                        final NBTTagCompound tagCompound = pstack.getTagCompound();
+
+                        if (tagCompound != null && tagCompound.hasKey("GT.ToolStats")) {
+                            istack.isContainerItem = true;
+                        } else {
+                            final boolean isPausedItemDamageSound = StackInfo.isPausedItemDamageSound();
+                            StackInfo.pauseItemDamageSound(true);
+
+                            final ItemStack containerItem = pstack.getItem().getContainerItem(pstack);
+                            if (containerItem != null) {
+                                istack.isContainerItem = pstack.getItem() == containerItem.getItem();
+                            }
+
+                            StackInfo.pauseItemDamageSound(isPausedItemDamageSound);
+                        }
+                    }
+                }
             }
         }
     }
@@ -272,13 +401,12 @@ public class DefaultOverlayHandler implements IOverlayHandler {
         return slot.inventory instanceof InventoryPlayer;
     }
 
-    @SuppressWarnings("unchecked")
     public Slot[][] mapIngredSlots(GuiContainer gui, List<PositionedStack> ingredients) {
         Slot[][] recipeSlotList = new Slot[ingredients.size()][];
         for (int i = 0; i < ingredients.size(); i++) /* identify slots */ {
             LinkedList<Slot> recipeSlots = new LinkedList<>();
             PositionedStack pstack = ingredients.get(i);
-            for (Slot slot : (List<Slot>) gui.inventorySlots.inventorySlots) {
+            for (Slot slot : gui.inventorySlots.inventorySlots) {
                 if (slot.xDisplayPosition == pstack.relx + offsetx && slot.yDisplayPosition == pstack.rely + offsety) {
                     recipeSlots.add(slot);
                     break;
@@ -290,22 +418,12 @@ public class DefaultOverlayHandler implements IOverlayHandler {
     }
 
     public DistributedIngred findIngred(List<DistributedIngred> ingredStacks, ItemStack pstack) {
-        for (DistributedIngred istack : ingredStacks) if (canStack(pstack, istack.stack)) return istack;
+        for (DistributedIngred istack : ingredStacks) if (canStack(istack.stack, pstack)) return istack;
         return null;
     }
 
     protected boolean canStack(ItemStack stack1, ItemStack stack2) {
         if (stack1 == null || stack2 == null) return true;
-        if (stack1.getItem() == stack2.getItem() && stack1.getItemDamage() == stack2.getItemDamage()) {
-            if (ItemStack.areItemStackTagsEqual(stack2, stack1)) return true;
-
-            // GT Items don't have any NBT set for the recipe, so if either of the stacks has a NULL nbt, and the other
-            // doesn't, pretend they stack
-            if (((gtItem != null && gtItem.isInstance(stack1.getItem()))
-                    || (stack1.getMaxStackSize() == 1 && stack2.getMaxStackSize() == 1))
-                    && (stack1.stackTagCompound == null ^ stack2.stackTagCompound == null))
-                return true;
-        }
-        return false;
+        return NEIClientUtils.areStacksSameTypeCraftingWithNBT(stack1, stack2);
     }
 }

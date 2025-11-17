@@ -66,16 +66,6 @@ public class NEITransformer implements IClassTransformer {
                                     "func_149689_a",
                                     "(Lnet/minecraft/world/World;IIILnet/minecraft/entity/EntityLivingBase;Lnet/minecraft/item/ItemStack;)V"),
                             asmblocks.get("spawnerPlaced")));
-
-            // Make MobSpawnerBaseLogic use getSpawnerWorld when creating new entities
-            transformer.add(
-                    new MethodReplacer(
-                            new ObfMapping(
-                                    "net/minecraft/tileentity/MobSpawnerBaseLogic",
-                                    "func_98281_h",
-                                    "()Lnet/minecraft/entity/Entity;"),
-                            asmblocks.get("d_spawnerWorld"),
-                            asmblocks.get("spawnerWorld")));
         }
 
         // Removes trailing seperators from NBTTagList/Compound.toString because OCD
@@ -423,7 +413,7 @@ public class NEITransformer implements IClassTransformer {
                 if (name.equals("net.minecraftforge.oredict.OreDictionary")) {
                     ClassReader cr = new ClassReader(bytes);
                     ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES);
-                    cr.accept(new OreDictionaryVisitor(ASM5, cw), ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+                    cr.accept(new OreDictionaryVisitor(ASM5, cw), 0);
                     bytes = cw.toByteArray();
                 }
                 bytes = transformSubclasses(name, bytes);

@@ -3,6 +3,7 @@ package codechicken.nei.api;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 import net.minecraft.block.Block;
 import net.minecraft.client.gui.inventory.GuiContainer;
@@ -25,6 +26,7 @@ import codechicken.nei.NEIClientConfig;
 import codechicken.nei.OffsetPositioner;
 import codechicken.nei.SearchField;
 import codechicken.nei.SearchField.ISearchProvider;
+import codechicken.nei.SearchTokenParser.ISearchParserProvider;
 import codechicken.nei.SubsetWidget;
 import codechicken.nei.SubsetWidget.SubsetTag;
 import codechicken.nei.api.IRecipeFilter.IRecipeFilterProvider;
@@ -41,6 +43,7 @@ import codechicken.nei.recipe.IUsageHandler;
 import codechicken.nei.recipe.RecipeCatalysts;
 import codechicken.nei.recipe.RecipeInfo;
 import codechicken.nei.recipe.StackInfo;
+import codechicken.nei.util.ItemStackFilterParser;
 
 /**
  * This is the main class that handles item property configuration. WARNING: DO NOT access this class until the world
@@ -150,12 +153,25 @@ public class API {
         }
     }
 
+    public static void hideItem(String rule) {
+        ItemFilter filter = ItemStackFilterParser.parse(rule);
+        if (filter != null) {
+            ItemInfo.hiddenItemsRules.filters.add(filter);
+            LayoutManager.markItemsDirty();
+        }
+    }
+
     /**
      * Add or replace the name normally shown on the item tooltip
      */
     public static void setOverrideName(ItemStack item, String name) {
-        if (!name.equals(ItemInfo.nameOverrides.get(item))) {
-            ItemInfo.nameOverrides.put(item, name);
+        String existing = ItemInfo.nameOverrides.get(item);
+        if (!Objects.equals(name, existing)) {
+            if (name == null) {
+                ItemInfo.nameOverrides.remove(item);
+            } else {
+                ItemInfo.nameOverrides.put(item, name);
+            }
             LayoutManager.markItemsDirty();
         }
     }
@@ -314,11 +330,14 @@ public class API {
         SubsetWidget.addTag(tag);
     }
 
+    @Deprecated
+    public static void addSearchProvider(ISearchProvider provider) {}
+
     /**
      * Adds a new search provider to the search field
      */
-    public static void addSearchProvider(ISearchProvider provider) {
-        SearchField.searchProviders.add(provider);
+    public static void addSearchProvider(ISearchParserProvider provider) {
+        SearchField.searchParser.addProvider(provider);
     }
 
     /**

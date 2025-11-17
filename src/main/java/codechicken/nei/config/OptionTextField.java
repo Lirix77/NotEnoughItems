@@ -1,46 +1,46 @@
 package codechicken.nei.config;
 
-import static codechicken.lib.gui.GuiDraw.drawString;
-import static codechicken.lib.gui.GuiDraw.getStringWidth;
-
 import java.util.List;
 
+import codechicken.lib.gui.GuiDraw;
 import codechicken.lib.vec.Rectangle4i;
 import codechicken.nei.TextField;
-import codechicken.nei.config.GuiOptionList.OptionScrollSlot;
 
 public class OptionTextField extends Option {
 
-    private TextField textField = new TextField("test") {
+    protected final TextField textField = new TextField("option-text-field") {
+
+        {
+            this.h = 20;
+        }
 
         @Override
         public void onTextChange(String oldText) {
-            if (focused() && isValidValue(text())) if (!defaulting() || !text().equals(getTag().getValue())) // don't
-                                                                                                             // override
-                                                                                                             // global
-                                                                                                             // if text
-                                                                                                             // hasn't
-                                                                                                             // changed
+            // don't override global if text hasn't changed
+            if (focused() && isValidValue(text()) && (!defaulting() || !text().equals(getTag().getValue()))) {
                 getTag().setValue(text());
+                OptionTextField.this.onTextChange(text());
+            }
         }
 
         @Override
         public void setFocus(boolean focus) {
             if (!focus && !isValidValue(text())) setText(renderTag().getValue());
-
             super.setFocus(focus);
+        }
+
+        @Override
+        public void draw(int mousex, int mousey) {
+            this.field.setEnabled(isEnabled());
+            super.draw(mousex, mousey);
         }
     };
 
     public OptionTextField(String name) {
         super(name);
-        textField.h = 20;
     }
 
-    @Override
-    public void onAdded(OptionScrollSlot slot) {
-        super.onAdded(slot);
-    }
+    public void onTextChange(String text) {}
 
     @Override
     public void update() {
@@ -52,23 +52,34 @@ public class OptionTextField extends Option {
         return translateN(name);
     }
 
+    protected int getMaxInputWidth() {
+        return slot.slotWidth();
+    }
+
+    public boolean isEnabled() {
+        return true;
+    }
+
     @Override
     public void draw(int mousex, int mousey, float frame) {
-        drawString(getPrefix(), 10, 6, -1);
+        GuiDraw.drawString(getPrefix(), 10, 6, -1);
 
-        textField.w = slot.slotWidth() - getStringWidth(getPrefix()) - 16;
+        textField.w = Math
+                .max(60, Math.min(getMaxInputWidth(), slot.slotWidth() - GuiDraw.getStringWidth(getPrefix())) - 16);
         textField.x = slot.slotWidth() - textField.w;
         textField.draw(mousex, mousey);
     }
 
     @Override
     public void keyTyped(char c, int keycode) {
-        textField.handleKeyPress(keycode, c);
+        if (isEnabled()) {
+            textField.handleKeyPress(keycode, c);
+        }
     }
 
     @Override
     public void mouseClicked(int mousex, int mousey, int button) {
-        if (textField.contains(mousex, mousey)) textField.handleClick(mousex, mousey, button);
+        if (isEnabled() && textField.contains(mousex, mousey)) textField.handleClick(mousex, mousey, button);
     }
 
     @Override
@@ -78,9 +89,9 @@ public class OptionTextField extends Option {
 
     @Override
     public List<String> handleTooltip(int mousex, int mousey, List<String> currenttip) {
-        if (new Rectangle4i(10, 0, textField.x - 10, 20).contains(mousex, mousey)) {
+        if (isEnabled() && new Rectangle4i(10, 0, textField.x - 10, 20).contains(mousex, mousey)) {
             String tip = translateN(name + ".tip");
-            if (!tip.equals(name + ".tip")) currenttip.add(tip);
+            if (!tip.equals(namespaced(name + ".tip"))) currenttip.add(tip);
         }
         return currenttip;
     }

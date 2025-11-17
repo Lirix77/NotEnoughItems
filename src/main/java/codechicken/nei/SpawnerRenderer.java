@@ -9,7 +9,6 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.boss.BossStatus;
 import net.minecraft.init.Blocks;
 import net.minecraft.item.ItemStack;
-import net.minecraft.world.World;
 import net.minecraftforge.client.IItemRenderer;
 
 import org.lwjgl.opengl.GL11;
@@ -27,21 +26,16 @@ public class SpawnerRenderer implements IItemRenderer {
 
     public void renderInventoryItem(RenderBlocks render, ItemStack item) {
         int meta = item.getItemDamage();
-
         if (meta == 0) meta = ItemMobSpawner.idPig;
-
         String bossName = BossStatus.bossName;
         int bossTimeout = BossStatus.statusBarTime;
         boolean bossHasColorModifier = BossStatus.hasColorModifier;
+        Entity entity = ItemMobSpawner.getEntity(meta);
         try {
-            World world = NEIClientUtils.mc().theWorld;
-            ItemMobSpawner.loadSpawners(world);
             CCRenderState.changeTexture(TextureMap.locationBlocksTexture);
             render.renderBlockAsItem(Blocks.mob_spawner, 0, 1F);
+            entity.setWorld(render.minecraftRB.theWorld);
             GL11.glPushMatrix();
-
-            Entity entity = ItemMobSpawner.getEntity(meta);
-            entity.setWorld(world);
             float f1 = 0.4375F;
             if (entity.getShadowSize() > 1.5) f1 = 0.1F;
             GL11.glRotatef((float) (ClientUtils.getRenderTime() * 10), 0.0F, 1.0F, 0.0F);
@@ -51,7 +45,6 @@ public class SpawnerRenderer implements IItemRenderer {
             entity.setLocationAndAngles(0, 0, 0, 0.0F, 0.0F);
             RenderManager.instance.renderEntityWithPosYaw(entity, 0.0D, 0.0D, 0.0D, 0.0F, 0);
             GL11.glPopMatrix();
-
             GL11.glEnable(GL12.GL_RESCALE_NORMAL);
             OpenGlHelper.setActiveTexture(OpenGlHelper.lightmapTexUnit);
             GL11.glDisable(GL11.GL_TEXTURE_2D);
@@ -64,7 +57,6 @@ public class SpawnerRenderer implements IItemRenderer {
         BossStatus.hasColorModifier = bossHasColorModifier;
     }
 
-    @SuppressWarnings("incomplete-switch")
     @Override
     public void renderItem(ItemRenderType type, ItemStack item, Object... data) {
         switch (type) {
@@ -74,6 +66,8 @@ public class SpawnerRenderer implements IItemRenderer {
             case INVENTORY:
             case ENTITY:
                 renderInventoryItem((RenderBlocks) data[0], item);
+                break;
+            default:
                 break;
         }
     }

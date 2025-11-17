@@ -1,45 +1,38 @@
 package codechicken.nei.recipe;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.WeakHashMap;
 
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NBTBase;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.nbt.NBTTagList;
 import net.minecraftforge.fluids.FluidContainerRegistry;
+import net.minecraftforge.fluids.FluidRegistry;
 import net.minecraftforge.fluids.FluidStack;
 import net.minecraftforge.fluids.IFluidContainerItem;
 
-import org.apache.commons.io.IOUtils;
-
-import codechicken.nei.NEIClientConfig;
+import codechicken.nei.ClientHandler;
+import codechicken.nei.ItemStackMap;
+import codechicken.nei.LRUCache;
 import codechicken.nei.api.IStackStringifyHandler;
+import codechicken.nei.api.ItemInfo;
 import codechicken.nei.recipe.stackinfo.DefaultStackStringifyHandler;
 import codechicken.nei.recipe.stackinfo.GTFluidStackStringifyHandler;
+import codechicken.nei.util.ItemStackKey;
+import codechicken.nei.util.NBTHelper;
 
 public class StackInfo {
 
-    public static final ArrayList<IStackStringifyHandler> stackStringifyHandlers = new ArrayList<>();
-    private static final HashMap<String, HashMap<String, String[]>> guidfilters = new HashMap<>();
-    private static final WeakHashMap<ItemStack, String> guidcache = new WeakHashMap<>();
-    private static final LinkedHashMap<ItemStack, FluidStack> fluidcache = new LinkedHashMap<ItemStack, FluidStack>() {
-
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<ItemStack, FluidStack> eldest) {
-            return size() > 20;
-        }
-    };
+    private static final FluidStack NULL_FLUID = new FluidStack(FluidRegistry.WATER, 0);
+    public static final List<IStackStringifyHandler> stackStringifyHandlers = new ArrayList<>();
+    private static final Map<String, HashMap<String, String[]>> guidfilters = new HashMap<>();
+    private static final ItemStackMap<String> guidcache = new ItemStackMap<>();
+    private static final LRUCache<ItemStackKey, FluidStack> fluidcache = new LRUCache<>(200);
+    private static boolean isPausedItemDamageSound = false;
 
     static {
         stackStringifyHandlers.add(new DefaultStackStringifyHandler());
@@ -83,12 +76,46 @@ public class StackInfo {
         return stack;
     }
 
+    public static ItemStack normalizeRecipeQueryStack(ItemStack stack) {
+        ItemStack result = null;
+
+        for (int i = stackStringifyHandlers.size() - 1; i >= 0 && result == null; i--) {
+            result = stackStringifyHandlers.get(i).normalizeRecipeQueryStack(stack);
+        }
+
+        return result == null ? stack : result;
+    }
+
+    public static void pauseItemDamageSound(boolean pause) {
+        if (isPausedItemDamageSound != (isPausedItemDamageSound = pause)) {
+            for (IStackStringifyHandler handler : stackStringifyHandlers) {
+                handler.pauseItemDamageSound(pause);
+            }
+        }
+    }
+
+    public static boolean isPausedItemDamageSound() {
+        return isPausedItemDamageSound;
+    }
+
+    public static ItemStack withAmount(ItemStack stack, long customCount) {
+        if (stack == null) return null;
+        final NBTTagCompound nbTag = StackInfo.itemStackToNBT(stack);
+        return nbTag != null ? loadFromNBT(nbTag, customCount) : null;
+    }
+
+    public static int getAmount(ItemStack stack) {
+        if (stack == null) return 0;
+        final NBTTagCompound nbTag = StackInfo.itemStackToNBT(stack);
+        return nbTag != null ? nbTag.getInteger("Count") : 0;
+    }
+
     public static boolean equalItemAndNBT(ItemStack stackA, ItemStack stackB, boolean useNBT) {
-        if (!stackA.isItemEqual(stackB)) {
+        if (stackA == null || stackB == null || stackA.getItem() != stackB.getItem()) {
             return false;
         }
 
-        if (useNBT) {
+        if (useNBT && stackA != stackB) {
             NBTTagCompound tagCompoundA = itemStackToNBT(stackA, false);
             NBTTagCompound tagCompoundB = itemStackToNBT(stackB, false);
 
@@ -99,19 +126,20 @@ public class StackInfo {
         return true;
     }
 
-    public static FluidStack getFluid(ItemStack stack) {
-        FluidStack fluid = fluidcache.get(stack);
+    public static synchronized FluidStack getFluid(ItemStack stack) {
+        ItemStackKey key = new ItemStackKey(stack);
+        FluidStack fluid = fluidcache.get(key);
 
-        if (fluid == null && !fluidcache.containsKey(stack)) {
+        if (fluid == null) {
 
             for (int i = stackStringifyHandlers.size() - 1; i >= 0 && fluid == null; i--) {
                 fluid = stackStringifyHandlers.get(i).getFluid(stack);
             }
 
-            fluidcache.put(stack, fluid);
+            fluidcache.put(key, fluid == null ? NULL_FLUID : fluid);
         }
 
-        return fluid;
+        return fluid == NULL_FLUID ? null : fluid;
     }
 
     public static boolean isFluidContainer(ItemStack stack) {
@@ -119,64 +147,69 @@ public class StackInfo {
     }
 
     public static String getItemStackGUID(ItemStack stack) {
-        if (!guidcache.containsKey(stack)) {
+        String guid = guidcache.get(stack);
 
-            final NBTTagCompound nbTag = itemStackToNBT(stack, false);
+        if (guid != null) {
+            return guid;
+        }
 
-            if (nbTag == null) {
-                return null;
-            }
+        final NBTTagCompound nbTag = itemStackToNBT(stack, false);
 
-            nbTag.removeTag("Count");
+        if (nbTag == null) {
+            return "unknown";
+        }
 
-            if (nbTag.getShort("Damage") == 0) {
-                nbTag.removeTag("Damage");
-            }
+        nbTag.removeTag("Count");
 
-            if (nbTag.hasKey("tag") && nbTag.getCompoundTag("tag").hasNoTags()) {
-                nbTag.removeTag("tag");
-            }
+        if (nbTag.getShort("Damage") == 0) {
+            nbTag.removeTag("Damage");
+        }
 
-            if (nbTag.hasKey("strId") && guidfilters.containsKey(nbTag.getString("strId"))) {
-                final ArrayList<String> keys = new ArrayList<>();
-                final String strId = nbTag.getString("strId");
+        if (nbTag.hasKey("tag") && nbTag.getCompoundTag("tag").hasNoTags()) {
+            nbTag.removeTag("tag");
+        }
 
-                keys.add(strId);
+        if (nbTag.hasKey("strId") && (guidfilters.containsKey(nbTag.getString("strId"))
+                || guidfilters.containsKey(nbTag.getString("strId") + "&" + nbTag.getShort("Damage")))) {
+            final String strId = nbTag.getString("strId")
+                    + (guidfilters.containsKey(nbTag.getString("strId")) ? "" : "&" + nbTag.getShort("Damage"));
+            final ArrayList<String> keys = new ArrayList<>();
 
-                guidfilters.get(strId).forEach((key, rule) -> {
-                    Object local = nbTag;
+            keys.add(strId);
 
-                    for (int i = 0; i < rule.length; i++) {
+            guidfilters.get(strId).forEach((key, rule) -> {
+                Object local = nbTag;
 
-                        try {
+                for (int i = 0; i < rule.length; i++) {
 
-                            if (local instanceof NBTTagCompound) {
-                                local = ((NBTTagCompound) local).getTag(rule[i]);
-                            } else if (local instanceof NBTTagList) {
-                                local = ((NBTTagList) local).tagList.get(Integer.parseInt(rule[i]));
-                            } else {
-                                break;
-                            }
+                    try {
 
-                        } catch (Throwable e) {
+                        if (local instanceof NBTTagCompound item) {
+                            local = item.getTag(rule[i]);
+                        } else if (local instanceof NBTTagList item) {
+                            local = item.tagList.get(Integer.parseInt(rule[i]));
+                        } else {
                             break;
                         }
-                    }
 
-                    if (local instanceof NBTBase) {
-                        keys.add(((NBTBase) local).toString());
-                    } else if (local != null) {
-                        keys.add(String.valueOf(local));
+                    } catch (Throwable e) {
+                        break;
                     }
-                });
+                }
 
-                synchronized (guidcache) {
-                    guidcache.put(stack, keys.toString());
+                if (local instanceof NBTBase item) {
+                    keys.add(NBTHelper.toString(item));
+                } else if (local != null) {
+                    keys.add(String.valueOf(local));
                 }
-            } else {
-                synchronized (guidcache) {
-                    guidcache.put(stack, nbTag.toString());
-                }
+            });
+
+            synchronized (guidcache) {
+                guidcache.put(stack, keys.toString());
+            }
+        } else {
+            synchronized (guidcache) {
+                guidcache.put(stack, NBTHelper.toString(nbTag));
             }
         }
 
@@ -184,37 +217,9 @@ public class StackInfo {
     }
 
     public static void loadGuidFilters() {
-
         guidfilters.clear();
 
-        final File guidFlitersFile = new File(NEIClientConfig.configDir, "guidfilters.cfg");
-        List<String> itemStrings = new ArrayList<>();
-
-        if (guidFlitersFile.exists()) {
-
-            try (FileReader reader = new FileReader(guidFlitersFile)) {
-                NEIClientConfig.logger.info("Loading guid filters from file {}", guidFlitersFile);
-                itemStrings = IOUtils.readLines(reader);
-            } catch (IOException e) {
-                NEIClientConfig.logger.error("Failed to load bookmarks from file {}", guidFlitersFile, e);
-                e.printStackTrace();
-            }
-
-        } else {
-            final URL filterUrl = StackInfo.class.getResource("/assets/nei/guidfilters.cfg");
-
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(filterUrl.openStream()))) {
-                itemStrings = IOUtils.readLines(reader);
-            } catch (IOException e) {
-                NEIClientConfig.logger.info("Error parsing guid filters");
-                e.printStackTrace();
-            } catch (Exception e) {
-                NEIClientConfig.logger.info("Error parsing guid filters");
-                e.printStackTrace();
-            }
-        }
-
-        for (String guidStr : itemStrings) {
+        ClientHandler.loadSettingsFile("guidfilters.cfg", lines -> lines.forEach(guidStr -> {
             final String[] parts = guidStr.split(",");
             final HashMap<String, String[]> rules = new HashMap<>();
 
@@ -223,17 +228,21 @@ public class StackInfo {
             }
 
             guidfilters.put(parts[0], rules);
-        }
+        }));
     }
 
     public static ItemStack getItemStackWithMinimumDamage(ItemStack[] stacks) {
-        int damage = Short.MAX_VALUE;
         ItemStack result = stacks[0];
 
         if (stacks.length > 1) {
             for (ItemStack stack : stacks) {
-                if (stack.getItem() != null && stack.getItemDamage() < damage) {
-                    damage = stack.getItemDamage();
+                // to optimize compare recipes from permutation, an item with a minimum strId and damage is taken so as
+                // not to check everything permutation items
+                if (stack.getItem() != null && !ItemInfo.isHidden(stack)
+                        && (stack.getItemDamage() < result.getItemDamage()
+                                || stack.getItemDamage() == result.getItemDamage()
+                                        && Item.itemRegistry.getNameForObject(stack.getItem())
+                                                .compareTo(Item.itemRegistry.getNameForObject(result.getItem())) < 0)) {
                     result = stack;
                 }
             }
