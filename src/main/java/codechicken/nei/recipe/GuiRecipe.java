@@ -849,7 +849,10 @@ public abstract class GuiRecipe<H extends IRecipeHandler> extends GuiContainer i
 
         if (renderer == null || moveItems) {
             if (overlayHandler != null) {
-                overlayHandler.overlayRecipe(firstGui, handler.original, recipeIndex, moveItems);
+                try {
+                    overlayHandler.overlayRecipe(firstGui, handler.original, recipeIndex, moveItems);
+                } catch (Throwable ignore) {
+                }
             }
         } else {
             LayoutManager.overlayRenderer = renderer;

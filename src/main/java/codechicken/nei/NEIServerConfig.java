@@ -12,6 +12,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
+import cpw.mods.fml.common.FMLCommonHandler;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.init.Blocks;
@@ -121,7 +122,7 @@ public class NEIServerConfig {
     }
 
     public static boolean canPlayerPerformAction(String playername, String name) {
-        return isPlayerInList(playername, getPlayerList("permissions." + NEIActions.base(name)), true);
+        return FMLCommonHandler.instance().getMinecraftServerInstance().isSinglePlayer() || isPlayerInList(playername, getPlayerList("permissions." + NEIActions.base(name)), true);
     }
 
     public static boolean isPlayerInList(String playername, Set<String> list, boolean allowCards) {

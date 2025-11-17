@@ -2,6 +2,7 @@ package codechicken.nei.event;
 
 import java.util.function.Consumer;
 
+import cpw.mods.fml.common.eventhandler.ListenerList;
 import net.minecraftforge.common.MinecraftForge;
 
 import codechicken.nei.NEIClientConfig;
@@ -19,6 +20,8 @@ import cpw.mods.fml.common.eventhandler.Event;
  */
 @SuppressWarnings("unused")
 public class NEIRegisterHandlerInfosEvent extends Event {
+
+    private static ListenerList LISTENER_LIST;
 
     public void registerHandlerInfo(HandlerInfo info) {
         if (GuiRecipeTab.handlerMap.put(info.getHandlerName(), info) != null) {
@@ -39,5 +42,17 @@ public class NEIRegisterHandlerInfosEvent extends Event {
     public void registerHandlerInfo(Class<? extends IRecipeHandler> handlerClazz, String modName, String modId,
             Consumer<HandlerInfo.Builder> builder) {
         registerHandlerInfo(handlerClazz.getName(), modName, modId, builder);
+    }
+
+
+    protected void setup() {
+        super.setup();
+        if (LISTENER_LIST == null) {
+            LISTENER_LIST = new ListenerList(super.getListenerList());
+        }
+    }
+
+    public ListenerList getListenerList() {
+        return LISTENER_LIST;
     }
 }
