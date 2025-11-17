@@ -2,16 +2,30 @@ package codechicken.nei;
 
 import net.minecraft.util.EnumChatFormatting;
 
+import codechicken.nei.SearchField.GuiSearchField;
+import codechicken.nei.api.IRecipeFilter;
+import codechicken.nei.api.IRecipeFilter.IRecipeFilterProvider;
 import codechicken.nei.api.ItemFilter;
+import codechicken.nei.api.ItemFilter.ItemFilterProvider;
 import codechicken.nei.util.TextHistory;
 
-public abstract class RecipeSearchField extends TextField {
+public abstract class RecipeSearchField extends TextField implements ItemFilterProvider, IRecipeFilterProvider {
 
     private static final TextHistory history = new TextHistory();
 
     public RecipeSearchField(String ident) {
         super(ident);
         this.field.setVisible(false);
+    }
+
+    @Override
+    protected void initInternalTextField() {
+        final GuiSearchField field = new GuiSearchField();
+        field.setMaxStringLength(maxSearchLength);
+        field.setCursorPositionZero();
+        field.setSkipRecipeTokens(true);
+        ((SearchTextFormatter) field.getFormatter()).setContextToken("<>");
+        this.field = field;
     }
 
     public boolean isVisible() {
@@ -50,8 +64,14 @@ public abstract class RecipeSearchField extends TextField {
         return EnumChatFormatting.getTextWithoutFormattingCodes(s);
     }
 
+    @Override
     public ItemFilter getFilter() {
-        return SearchField.getFilter(text());
+        return ((GuiSearchField) field).getFilter();
+    }
+
+    @Override
+    public IRecipeFilter getRecipeFilter() {
+        return ((GuiSearchField) field).getRecipeFilter();
     }
 
     @Override

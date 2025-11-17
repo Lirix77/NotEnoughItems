@@ -1,5 +1,6 @@
 package codechicken.nei.util;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -42,12 +43,10 @@ public class NBTJson {
             // NBTTagCompound
             final NBTTagCompound nbtTagCompound = (NBTTagCompound) nbt;
             final Map<String, NBTBase> tagMap = (Map<String, NBTBase>) nbtTagCompound.tagMap;
+            final JsonObject root = new JsonObject();
 
-            JsonObject root = new JsonObject();
-
-            for (Map.Entry<String, NBTBase> nbtEntry : tagMap.entrySet()) {
-                root.add(nbtEntry.getKey(), toJsonObject(nbtEntry.getValue()));
-            }
+            tagMap.entrySet().stream().sorted(Map.Entry.<String, NBTBase>comparingByKey())
+                    .forEach(nbtEntry -> { root.add(nbtEntry.getKey(), toJsonObject(nbtEntry.getValue())); });
 
             return root;
         } else if (nbt instanceof NBTTagByte) {
@@ -216,8 +215,9 @@ public class NBTJson {
         if (obj.has("__custom_type")) {
             try {
                 final String className = obj.get("__custom_type").getAsString();
-                return (NBTBase) Class.forName(className).newInstance();
-            } catch (ClassNotFoundException | InstantiationException | IllegalAccessException th) {}
+                return (NBTBase) Class.forName(className).getConstructor().newInstance();
+            } catch (InstantiationException | IllegalAccessException | InvocationTargetException | NoSuchMethodException
+                    | SecurityException | ClassNotFoundException th) {}
         }
 
         return null;

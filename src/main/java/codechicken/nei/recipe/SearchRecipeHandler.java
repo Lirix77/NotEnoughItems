@@ -1,8 +1,10 @@
 package codechicken.nei.recipe;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
-import java.util.function.Predicate;
+import java.util.function.IntPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -14,34 +16,30 @@ class SearchRecipeHandler<H extends IRecipeHandler> {
 
     public H original;
 
-    private ArrayList<Integer> filteredRecipes;
+    private List<Integer> filteredRecipes;
 
-    private ArrayList<Integer> searchRecipes;
+    private List<Integer> searchRecipes;
 
     public SearchRecipeHandler(H handler) {
         this.original = handler;
 
         if (this.original.numRecipes() == 0) {
-            this.filteredRecipes = new ArrayList<>();
+            this.filteredRecipes = Collections.emptyList();
         } else {
             final Stream<Integer> items = IntStream.range(0, this.original.numRecipes()).boxed();
             final IRecipeFilter filter = this.searchingAvailable() ? GuiRecipe.getRecipeListFilter() : null;
 
             if (filter == null) {
-                this.filteredRecipes = items.collect(Collectors.toCollection(ArrayList::new));
+                this.filteredRecipes = items.collect(Collectors.toList());
             } else {
                 this.filteredRecipes = items.filter(recipe -> mathRecipe(this.original, recipe, filter))
-                        .collect(Collectors.toCollection(ArrayList::new));
+                        .collect(Collectors.toList());
             }
         }
     }
 
-    protected static boolean mathRecipe(IRecipeHandler handler, int recipe, IRecipeFilter filter) {
-        return filter.matches(
-                handler,
-                handler.getIngredientStacks(recipe),
-                handler.getResultStack(recipe),
-                handler.getOtherStacks(recipe));
+    protected static boolean mathRecipe(IRecipeHandler handler, int recipeIndex, IRecipeFilter filter) {
+        return filter.matches(handler, recipeIndex);
     }
 
     public boolean searchingAvailable() {
@@ -52,7 +50,7 @@ class SearchRecipeHandler<H extends IRecipeHandler> {
         return handler instanceof TemplateRecipeHandler;
     }
 
-    public static int findFirst(IRecipeHandler handler, Predicate<Integer> predicate) {
+    public static int findFirst(IRecipeHandler handler, IntPredicate predicate) {
         final IRecipeFilter filter = searchingAvailable(handler) ? GuiRecipe.getRecipeListFilter() : null;
         int refIndex = -1;
 
@@ -69,14 +67,14 @@ class SearchRecipeHandler<H extends IRecipeHandler> {
         return -1;
     }
 
-    public ArrayList<Integer> getSearchResult(IRecipeFilter filter) {
+    public List<Integer> getSearchResult(IRecipeFilter filter) {
 
         if (filteredRecipes.isEmpty() || !this.searchingAvailable()) {
             return null;
         }
 
-        ArrayList<Integer> filtered = null;
-        final ArrayList<Integer> recipes = IntStream.range(0, filteredRecipes.size()).boxed()
+        List<Integer> filtered = null;
+        final List<Integer> recipes = IntStream.range(0, filteredRecipes.size()).boxed()
                 .collect(Collectors.toCollection(ArrayList::new));
 
         try {
@@ -95,7 +93,7 @@ class SearchRecipeHandler<H extends IRecipeHandler> {
         return filtered;
     }
 
-    public void setSearchIndices(ArrayList<Integer> searchRecipes) {
+    public void setSearchIndices(List<Integer> searchRecipes) {
         this.searchRecipes = searchRecipes;
     }
 

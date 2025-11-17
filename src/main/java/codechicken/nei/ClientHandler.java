@@ -6,67 +6,67 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiErrorScreen;
-import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiSelectWorld;
+import net.minecraft.client.gui.inventory.GuiContainer;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.resources.IResource;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.item.EntityItem;
+import net.minecraft.launchwrapper.Launch;
+import net.minecraft.util.ResourceLocation;
 import net.minecraft.world.World;
+import net.minecraftforge.client.event.GuiOpenEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.world.WorldEvent;
 
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.io.IOUtils;
 
 import com.google.common.collect.Lists;
 
+import codechicken.core.ClassDiscoverer;
 import codechicken.core.ClientUtils;
 import codechicken.core.GuiModListScroll;
 import codechicken.lib.packet.PacketCustom;
 import codechicken.nei.api.API;
+import codechicken.nei.api.IConfigureNEI;
 import codechicken.nei.api.ItemInfo;
+import codechicken.nei.guihook.GuiContainerManager;
 import codechicken.nei.recipe.GuiRecipeTab;
 import codechicken.nei.recipe.StackInfo;
 import cpw.mods.fml.client.CustomModLoadingErrorDisplayException;
 import cpw.mods.fml.common.FMLCommonHandler;
+import cpw.mods.fml.common.Loader;
+import cpw.mods.fml.common.ModClassLoader;
+import cpw.mods.fml.common.discovery.ASMDataTable;
 import cpw.mods.fml.common.eventhandler.SubscribeEvent;
 import cpw.mods.fml.common.gameevent.TickEvent;
 import cpw.mods.fml.common.gameevent.TickEvent.Phase;
 import cpw.mods.fml.relauncher.Side;
 import cpw.mods.fml.relauncher.SideOnly;
 
-import static codechicken.nei.NEIClientConfig.configDir;
-
 public class ClientHandler {
 
-    private static String[] defaultHandlerOrdering = {
-            "# Each line in this file should either be a comment (starts with '#') or an ordering.",
-            "# Ordering lines are <handler ID>,<ordering number>.",
-            "# Handlers will be sorted in order of number ascending, so smaller numbers first.",
-            "# Any handlers that are missing from this file will be assigned to 0.", "# Negative numbers are fine.",
-            "# If you delete this file, it will be regenerated with all registered handler IDs.", };
     private static ClientHandler instance;
-
-    private ArrayList<EntityItem> SMPmagneticItems = new ArrayList<>();
+    private final ArrayList<EntityItem> SMPmagneticItems = new ArrayList<>();
     private World lastworld;
-    private GuiScreen lastGui;
 
     public void addSMPMagneticItem(int i, World world) {
         WorldClient cworld = (WorldClient) world;
@@ -149,82 +149,128 @@ public class ClientHandler {
 
     public static void preInit() {
         loadSerialHandlers();
+        loadHiddenItems();
         loadHeightHackHandlers();
         loadHiddenHandlers();
+        loadEnableAutoFocus();
+        loadGuiCraftablesBlacklist();
+        loadDefaultBookmarkContainers();
         ItemInfo.preInit();
         StackInfo.loadGuidFilters();
     }
 
-    public static void loadSerialHandlers() {
-        File file = new File(configDir, "serialhandlers.cfg");
-        if (!file.exists()) {
+    public static void loadSettingsFile(String resource, Consumer<Stream<String>> callback) {
+        loadSettingsFile(resource, (file, writer) -> {
+            String folder = resource.substring(resource.lastIndexOf(".") + 1);
+            URL defaultResource = ClientHandler.class.getResource("/assets/nei/" + folder + "/" + resource);
+
+            if (defaultResource != null) {
+                try {
+                    IOUtils.copy(defaultResource.openStream(), writer);
+                } catch (IOException e) {}
+            }
+        }, callback);
+    }
+
+    public static boolean loadSettingsResource(String resource, Consumer<Stream<String>> callback) {
+        final ResourceLocation location = new ResourceLocation("nei", resource);
+
+        try {
+            final IResource res = Minecraft.getMinecraft().getResourceManager().getResource(location);
+
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(res.getInputStream(), StandardCharsets.UTF_8))) {
+                NEIClientConfig.logger.info("Loading '{}' from jar {}", resource, location);
+                callback.accept(
+                        IOUtils.readLines(reader).stream()
+                                .map(line -> line.contains("#") ? line.substring(0, line.indexOf('#')) : line)
+                                .map(String::trim).filter(line -> !line.isEmpty()));
+                return true;
+            }
+
+        } catch (Exception io) {
+            NEIClientConfig.logger.error("Failed to load '{}' file {}", resource, location);
+        }
+
+        return false;
+    }
+
+    public static boolean loadSettingsFile(String resource, BiConsumer<File, FileWriter> createDefault,
+            Consumer<Stream<String>> callback) {
+        File file = new File(NEIClientConfig.configDir, resource);
+
+        if (!file.exists() && createDefault != null) {
             try (FileWriter writer = new FileWriter(file)) {
-                NEIClientConfig.logger.info("Creating default serial handlers list {}", file);
-                URL defaultSerialHandlersResource = ClientHandler.class
-                        .getResource("/assets/nei/cfg/serialhandlers.cfg");
-                if (defaultSerialHandlersResource != null) {
-                    IOUtils.copy(defaultSerialHandlersResource.openStream(), writer);
-                }
+                NEIClientConfig.logger.info("Creating default '{}' {}", resource, file);
+                createDefault.accept(file, writer);
             } catch (IOException e) {
-                NEIClientConfig.logger.error("Failed to save default serial handlers list to file {}", file, e);
+                NEIClientConfig.logger.error("Failed to save default '{}' to file {}", resource, file, e);
             }
         }
-        try (FileReader reader = new FileReader(file)) {
-            NEIClientConfig.logger.info("Loading serial handlers from file {}", file);
-            NEIClientConfig.serialHandlers = IOUtils.readLines(reader).stream().filter((line) -> !line.startsWith("#"))
-                    .collect(Collectors.toCollection(HashSet::new));
-        } catch (IOException e) {
-            NEIClientConfig.logger.error("Failed to load serial handlers from file {}", file, e);
+
+        if (file.exists()) {
+            try (FileReader reader = new FileReader(file)) {
+                NEIClientConfig.logger.info("Loading '{}' file {}", resource, file);
+                callback.accept(
+                        IOUtils.readLines(reader).stream()
+                                .map(line -> line.contains("#") ? line.substring(0, line.indexOf('#')) : line)
+                                .map(String::trim).filter(line -> !line.isEmpty()));
+                return true;
+            } catch (IOException e) {
+                NEIClientConfig.logger.error("Failed to load '{}' file {}", resource, file, e);
+            }
         }
+
+        return false;
+    }
+
+    public static void loadSerialHandlers() {
+        loadSettingsFile(
+                "serialhandlers.cfg",
+                lines -> NEIClientConfig.serialHandlers = lines.collect(Collectors.toCollection(HashSet::new)));
     }
 
     public static void loadHeightHackHandlers() {
-        File file = new File(configDir, "heighthackhandlers.cfg");
-        if (!file.exists()) {
-            try (FileWriter writer = new FileWriter(file)) {
-                NEIClientConfig.logger.info("Creating default height hack handlers list {}", file);
-                URL defaultHeightHackHandlersResource = ClientHandler.class
-                        .getResource("/assets/nei/cfg/heighthackhandlers.cfg");
-                if (defaultHeightHackHandlersResource != null) {
-                    IOUtils.copy(defaultHeightHackHandlersResource.openStream(), writer);
-                }
-            } catch (IOException e) {
-                NEIClientConfig.logger.error("Failed to save default height hack handlers list to file {}", file, e);
-            }
-        }
-
-        try (FileReader reader = new FileReader(file)) {
-            NEIClientConfig.logger.info("Loading height hack handlers from file {}", file);
-            NEIClientConfig.heightHackHandlerRegex = IOUtils.readLines(reader).stream()
-                    .filter((line) -> !line.startsWith("#")).map(Pattern::compile)
-                    .collect(Collectors.toCollection(HashSet::new));
-        } catch (IOException e) {
-            NEIClientConfig.logger.error("Failed to load height hack handlers from file {}", file, e);
-        }
+        loadSettingsFile(
+                "heighthackhandlers.cfg",
+                lines -> NEIClientConfig.heightHackHandlerRegex = lines.map(Pattern::compile)
+                        .collect(Collectors.toCollection(HashSet::new)));
     }
 
     public static void loadHiddenHandlers() {
-        File file = new File(configDir, "hiddenhandlers.csv");
-        if (!file.exists()) {
-            try (FileWriter writer = new FileWriter(file)) {
-                NEIClientConfig.logger.info("Creating default hidden handlers list {}", file);
-                URL defaultHeightHackHandlersResource = ClientHandler.class
-                        .getResource("/assets/nei/cfg/hiddenhandlers.cfg");
-                if (defaultHeightHackHandlersResource != null) {
-                    IOUtils.copy(defaultHeightHackHandlersResource.openStream(), writer);
-                }
-            } catch (IOException e) {
-                NEIClientConfig.logger.error("Failed to save default hidden handlers list to file {}", file, e);
-            }
-        }
+        loadSettingsFile(
+                "hiddenhandlers.cfg",
+                lines -> NEIClientConfig.hiddenHandlers = lines.collect(Collectors.toCollection(HashSet::new)));
+    }
 
-        try (FileReader reader = new FileReader(file)) {
-            NEIClientConfig.logger.info("Loading hidden handlers from file {}", file);
-            NEIClientConfig.hiddenHandlers = IOUtils.readLines(reader).stream().filter((line) -> !line.startsWith("#"))
-                    .collect(Collectors.toCollection(HashSet::new));
-        } catch (IOException e) {
-            NEIClientConfig.logger.error("Failed to load hidden handlers from file {}", file, e);
-        }
+    public static void loadEnableAutoFocus() {
+        loadSettingsFile(
+                "enableautofocus.cfg",
+                lines -> AutoFocusWidget.enableAutoFocusPrefixes = lines.collect(Collectors.toList()));
+    }
+
+    public static void loadGuiCraftablesBlacklist() {
+        loadSettingsFile(
+                "guicraftablesblacklist.cfg",
+                lines -> ItemCraftablesPanel.guiBlacklist = lines.collect(Collectors.toList()));
+    }
+
+    public static void loadDefaultBookmarkContainers() {
+        loadSettingsFile("defaultbookmarkcontainers.cfg", lines -> {
+            for (String clazz : lines.collect(Collectors.toList())) {
+                try {
+                    API.registerBookmarkContainerHandler(
+                            (Class<? extends GuiContainer>) Class.forName(clazz),
+                            new DefaultBookmarkContainerHandler());
+                } catch (Exception e) {
+                    NEIClientConfig.logger.error("Failed to load class '{}' for defaultbookmarkcontainers.cfg", clazz);
+                }
+            }
+        });
+    }
+
+    public static void loadHiddenItems() {
+        loadSettingsFile("hiddenitems.cfg", lines -> lines.forEach(API::hideItem));
     }
 
     public static void load() {
@@ -241,53 +287,60 @@ public class ClientHandler {
     }
 
     public static void postInit() {
-        loadHandlerOrdering();
+        GuiContainerManager.registerReloadResourceListener();
     }
 
     public static void loadHandlerOrdering() {
-        File file = new File(configDir, "handlerordering.csv");
-        if (!file.exists()) {
-            try (FileWriter writer = new FileWriter(file)) {
-                NEIClientConfig.logger.info("Creating default handler ordering CSV {}", file);
+        final String COMMA_DELIMITER = ",";
+        final String[] defaultHandlerOrdering = {
+                "# Each line in this file should either be a comment (starts with '#') or an ordering.",
+                "# Ordering lines are <handler ID>,<ordering number>.",
+                "# Handlers will be sorted in order of number ascending, so smaller numbers first.",
+                "# Any handlers that are missing from this file will be assigned to 0.", "# Negative numbers are fine.",
+                "# If you delete this file, it will be regenerated with all registered handler IDs.", };
 
-                List<String> toWrite = Lists.newArrayList(defaultHandlerOrdering);
-                GuiRecipeTab.handlerMap.keySet().stream().sorted()
-                        .forEach(handlerId -> toWrite.add(String.format("%s,0", handlerId)));
-
+        loadSettingsFile("handlerordering.csv", (file, writer) -> {
+            List<String> toWrite = Lists.newArrayList(defaultHandlerOrdering);
+            GuiRecipeTab.handlerMap.keySet().stream().sorted()
+                    .forEach(handlerId -> toWrite.add(String.format("%s" + COMMA_DELIMITER + "0", handlerId)));
+            try {
                 IOUtils.writeLines(toWrite, "\n", writer);
-            } catch (IOException e) {
-                NEIClientConfig.logger.error("Failed to save default handler ordering to file {}", file, e);
-            }
-        }
+            } catch (IOException e) {}
+        }, lines -> lines.map(line -> line.split(COMMA_DELIMITER)).filter(parts -> parts.length == 2).forEach(parts -> {
+            String handlerId = parts[0];
+            int ordering = Integer.parseInt(parts[1]);
+            NEIClientConfig.handlerOrdering.put(handlerId, ordering);
+        }));
+    }
 
-        URL url;
-        try {
-            url = file.toURI().toURL();
-        } catch (MalformedURLException e) {
-            NEIClientConfig.logger.info("Invalid URL for handler ordering CSV.");
-            e.printStackTrace();
-            return;
-        }
+    public static void loadPluginsList() {
+        final boolean jarjar = Launch.blackboard.getOrDefault("jarjar.rfbPluginLoaded", Boolean.FALSE) == Boolean.TRUE;
+        if (!jarjar) {
+            // Do the old style class discovery
+            final ClassDiscoverer classDiscoverer = new ClassDiscoverer(
+                    test -> test.startsWith("NEI") && test.endsWith("Config.class"),
+                    IConfigureNEI.class);
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(url.openStream()))) {
-            NEIClientConfig.logger.info("Loading handler ordering from file {}", file);
-            CSVParser csvParser = CSVFormat.EXCEL.withCommentMarker('#').parse(reader);
-            for (CSVRecord record : csvParser) {
-                final String handlerId = record.get(0);
+            NEIClientConfig.pluginsList.addAll(classDiscoverer.findClasses());
+            NEIClientConfig.logger
+                    .info("Loading NEI Plugins via ClassDiscoverer: " + NEIClientConfig.pluginsList.size());
 
-                int ordering;
+        } else {
+            // If JarJar's loaded, the ASMDataTable now includes interfaces in addition to Annotations, so use that
+            // instead Includes a small change in behavior of no longer requiring the class to start with NEI and end
+            // with Config; This could easily be changed if desired, but the previous behavior was likely to speed
+            // things up by limiting the scope when looking at all of the jars and classes in the classpath.
+            final ASMDataTable dataTable = NEIModContainer.getAsmDataTable();
+            final ModClassLoader modClassLoader = (ModClassLoader) Loader.instance().getModClassLoader();
+            for (ASMDataTable.ASMData asmData : dataTable.getAll(IConfigureNEI.class.getName().replace('.', '/'))) {
+                final String className = asmData.getClassName().replace('/', '.');
                 try {
-                    ordering = Integer.parseInt(record.get(1));
-                } catch (NumberFormatException e) {
-                    NEIClientConfig.logger.error("Error parsing CSV record {}: {}", record, e);
-                    continue;
+                    NEIClientConfig.pluginsList.add(Class.forName(className, true, modClassLoader));
+                } catch (ClassNotFoundException e) {
+                    NEIClientConfig.logger.error("Failed to load plugin class {}", className, e);
                 }
-
-                NEIClientConfig.handlerOrdering.put(handlerId, ordering);
             }
-        } catch (Exception e) {
-            NEIClientConfig.logger.info("Error parsing CSV");
-            e.printStackTrace();
+            NEIClientConfig.logger.info("Loading NEI Plugins via JarJar: " + NEIClientConfig.pluginsList.size());
         }
     }
 
@@ -311,18 +364,19 @@ public class ClientHandler {
             if (mc.currentScreen == null) NEIController.processCreativeCycling(mc.thePlayer.inventory);
 
             updateMagnetMode(mc.theWorld, mc.thePlayer);
+        } else {
+            lastworld = null;
         }
+    }
 
-        GuiScreen gui = mc.currentScreen;
-        if (gui != lastGui) {
-            if (gui instanceof GuiMainMenu) lastworld = null;
-            else if (gui instanceof GuiSelectWorld) NEIClientConfig.reloadSaves();
-            else if (gui == null) {
-                /* prevent WorldClient reference being held in the Gui */
-                NEIController.manager = null;
-            }
+    @SubscribeEvent
+    public void onGuiScreen(GuiOpenEvent event) {
+        if (event.gui instanceof GuiSelectWorld) {
+            NEIClientConfig.reloadSaves();
+        } else if (event.gui == null) {
+            /* prevent WorldClient reference being held in the Gui */
+            NEIController.manager = null;
         }
-        lastGui = gui;
     }
 
     @SubscribeEvent
@@ -341,24 +395,23 @@ public class ClientHandler {
         Minecraft mc = Minecraft.getMinecraft();
         if (event.world == mc.theWorld) {
             NEIClientConfig.unloadWorld();
+            ItemMobSpawner.clearEntityReferences();
         }
     }
 
     public void loadWorld(World world, boolean fromServer) {
         if (world != lastworld) {
             SMPmagneticItems.clear();
-            WorldOverlayRenderer.reset();
-
+            if (!NEIClientConfig.getBooleanSetting("world.overlays.lock")) {
+                WorldOverlayRenderer.reset();
+            }
             if (!fromServer) {
                 NEIClientConfig.setHasSMPCounterPart(false);
                 NEIClientConfig.setInternalEnabled(false);
 
                 if (!Minecraft.getMinecraft().isSingleplayer()) // wait for server to initiate in singleplayer
                     NEIClientConfig.loadWorld("remote/" + ClientUtils.getServerIP().replace(':', '~'));
-
-                ItemMobSpawner.clearEntityReferences(world);
             }
-
             lastworld = world;
         }
     }
@@ -385,8 +438,9 @@ public class ClientHandler {
             }
         };
 
-        @SuppressWarnings("serial")
         CustomModLoadingErrorDisplayException e = new CustomModLoadingErrorDisplayException() {
+
+            private static final long serialVersionUID = -5593387489666663375L;
 
             @Override
             public void initGui(GuiErrorScreen errorScreen, FontRenderer fontRenderer) {

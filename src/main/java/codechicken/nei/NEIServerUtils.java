@@ -17,6 +17,7 @@ import net.minecraft.enchantment.Enchantment;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.entity.player.InventoryPlayer;
+import net.minecraft.event.ClickEvent;
 import net.minecraft.inventory.Slot;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
@@ -46,8 +47,24 @@ import codechicken.nei.PacketIDs.S2C;
 import codechicken.nei.util.NBTHelper;
 import cpw.mods.fml.common.FMLLog;
 import cpw.mods.fml.common.registry.GameRegistry;
+import cpw.mods.fml.relauncher.ReflectionHelper;
 
 public class NEIServerUtils {
+
+    private static class GTMetaBaseItemHolder {
+
+        private static final Class<?> gtMetaBaseItem = loadMetaBaseItem();
+
+        private static Class<?> loadMetaBaseItem() {
+            try {
+                final ClassLoader loader = NEIServerUtils.class.getClassLoader();
+                return ReflectionHelper
+                        .getClass(loader, "gregtech.api.items.MetaBaseItem", "gregtech.api.items.GT_MetaBase_Item");
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+    }
 
     public static boolean isRaining(World world) {
         return world.getWorldInfo().isRaining();
@@ -67,6 +84,18 @@ public class NEIServerUtils {
         player.heal(20);
         player.getFoodStats().addStats(20, 1);
         player.extinguish();
+    }
+
+    public static void sendChatItemLink(EntityPlayerMP sender, ItemStack stackover) {
+        ServerUtils.sendChatToAll(
+                new ChatComponentTranslation(
+                        "nei.chat.item_link.text",
+                        sender.getDisplayName(),
+                        stackover.func_151000_E().setChatStyle(
+                                stackover.func_151000_E().getChatStyle().setChatClickEvent(
+                                        new ClickEvent(
+                                                ClickEvent.Action.RUN_COMMAND,
+                                                "/nei_bookmark " + stackover.writeToNBT(new NBTTagCompound()))))));
     }
 
     public static long getTime(World world) {
@@ -89,9 +118,8 @@ public class NEIServerUtils {
         else return player.inventory.getStackInSlot(slot);
     }
 
-    @SuppressWarnings("unchecked")
     public static void deleteAllItems(EntityPlayerMP player) {
-        for (Slot slot : (List<Slot>) player.openContainer.inventorySlots) slot.putStack(null);
+        for (Slot slot : player.openContainer.inventorySlots) slot.putStack(null);
 
         player.sendContainerAndContentsToPlayer(player.openContainer, player.openContainer.getInventory());
     }
@@ -147,7 +175,7 @@ public class NEIServerUtils {
 
     /**
      * NBT-friendly version of {@link #areStacksSameType(ItemStack, ItemStack)}
-     * 
+     *
      * @param stack1 The {@link ItemStack} being compared.
      * @param stack2 The {@link ItemStack} to compare to.
      * @return whether the two items are the same in terms of itemID, damage and NBT.
@@ -178,19 +206,36 @@ public class NEIServerUtils {
 
     /**
      * NBT-friendly version of {@link #areStacksSameTypeCrafting(ItemStack, ItemStack)}
-     * 
+     *
      * @param stack1 The {@link ItemStack} being compared.
      * @param stack2 The {@link ItemStack} to compare to.
      * @return whether the two items are the same from the perspective of a crafting inventory.
      */
     public static boolean areStacksSameTypeCraftingWithNBT(ItemStack stack1, ItemStack stack2) {
-        return stack1 != null && stack2 != null
-                && stack1.getItem() == stack2.getItem()
-                && (stack1.getItemDamage() == stack2.getItemDamage()
-                        || stack1.getItemDamage() == OreDictionary.WILDCARD_VALUE
-                        || stack2.getItemDamage() == OreDictionary.WILDCARD_VALUE
-                        || stack1.getItem().isDamageable())
-                && NBTHelper.matchTag(stack1.getTagCompound(), stack2.getTagCompound());
+
+        if (NEIServerUtils.areStacksSameTypeCrafting(stack2, stack1)) {
+            if (NBTHelper.matchTag(stack1.getTagCompound(), stack2.getTagCompound())) return true;
+            if (isItemTool(stack1)
+                    && (stack1.stackTagCompound == null || stack1.stackTagCompound.hasKey("GT.ToolStats"))
+                    && (stack2.stackTagCompound == null || stack2.stackTagCompound.hasKey("GT.ToolStats")))
+                return true;
+            return stack1.getMaxStackSize() == 1 && stack2.getMaxStackSize() == 1
+                    && (stack1.stackTagCompound == null ^ stack2.stackTagCompound == null);
+        }
+
+        return false;
+    }
+
+    /**
+     * GT Items don't have any NBT set for the recipe, so if either of the stacks has a NULL nbt, and the other doesn't,
+     * pretend they stack
+     *
+     * @param ItemStack stack
+     * @return
+     */
+    public static boolean isItemTool(ItemStack stack) {
+        return GTMetaBaseItemHolder.gtMetaBaseItem != null
+                && GTMetaBaseItemHolder.gtMetaBaseItem.isInstance(stack.getItem());
     }
 
     /**

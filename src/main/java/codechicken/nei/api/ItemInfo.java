@@ -5,8 +5,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
 
 import net.minecraft.block.Block;
 import net.minecraft.client.resources.I18n;
@@ -44,12 +44,16 @@ import com.google.common.collect.ArrayListMultimap;
 import codechicken.core.featurehack.GameDataManipulator;
 import codechicken.nei.InfiniteStackSizeHandler;
 import codechicken.nei.InfiniteToolHandler;
-import codechicken.nei.ItemList;
+import codechicken.nei.ItemList.AnyMultiItemFilter;
+import codechicken.nei.ItemList.PatternItemFilter;
 import codechicken.nei.ItemMobSpawner;
 import codechicken.nei.ItemStackMap;
 import codechicken.nei.ItemStackSet;
 import codechicken.nei.NEIClientConfig;
 import codechicken.nei.PopupInputHandler;
+import codechicken.nei.PresetsList;
+import codechicken.nei.SearchField.SearchParserProvider;
+import codechicken.nei.SearchTokenParser.SearchMode;
 import codechicken.nei.config.ArrayDumper;
 import codechicken.nei.config.HandlerDumper;
 import codechicken.nei.config.ItemPanelDumper;
@@ -57,6 +61,11 @@ import codechicken.nei.config.RegistryDumper;
 import codechicken.nei.guihook.GuiContainerManager;
 import codechicken.nei.recipe.BrewingRecipeHandler;
 import codechicken.nei.recipe.RecipeItemInputHandler;
+import codechicken.nei.search.IdentifierFilter;
+import codechicken.nei.search.ModNameFilter;
+import codechicken.nei.search.OreDictionaryFilter;
+import codechicken.nei.search.TooltipFilter;
+import codechicken.nei.util.ItemUntranslator;
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.common.ModContainer;
 import cpw.mods.fml.common.registry.GameRegistry;
@@ -76,6 +85,7 @@ public class ItemInfo {
     public static final ArrayListMultimap<Layout, IHighlightHandler> highlightHandlers = ArrayListMultimap.create();
     public static final ItemStackMap<String> nameOverrides = new ItemStackMap<>();
     public static final ItemStackSet hiddenItems = new ItemStackSet();
+    public static final AnyMultiItemFilter hiddenItemsRules = new AnyMultiItemFilter();
     public static final ItemStackSet finiteItems = new ItemStackSet();
     public static final ArrayListMultimap<Item, ItemStack> itemOverrides = ArrayListMultimap.create();
     public static final ArrayListMultimap<Item, ItemStack> itemVariants = ArrayListMultimap.create();
@@ -86,40 +96,11 @@ public class ItemInfo {
 
     public static final HashMap<Item, String> itemOwners = new HashMap<>();
 
-    private static class ItemStackKey {
-
-        public final ItemStack stack;
-
-        public ItemStackKey(ItemStack stack) {
-            this.stack = stack;
-        }
-
-        @Override
-        public int hashCode() {
-            if (this.stack == null) return 1;
-            int hashCode = 1;
-            hashCode = 31 * hashCode + stack.stackSize;
-            hashCode = 31 * hashCode + Item.getIdFromItem(stack.getItem());
-            hashCode = 31 * hashCode + stack.getItemDamage();
-            hashCode = 31 * hashCode + (!stack.hasTagCompound() ? 0 : stack.getTagCompound().hashCode());
-            return hashCode;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (o == this) return true;
-            if (!(o instanceof ItemStackKey)) return false;
-            return ItemStack.areItemStacksEqual(this.stack, ((ItemStackKey) o).stack);
-        }
-    }
-
-    // lookup optimisation
-    public static final ConcurrentHashMap<ItemStackKey, String> itemSearchNames = new ConcurrentHashMap<>();
-
     public static boolean isHidden(ItemStack stack) {
-        return hiddenItems.contains(stack);
+        return hiddenItems.contains(stack) || hiddenItemsRules.matches(stack);
     }
 
+    @Deprecated
     public static boolean isHidden(Item item) {
         return hiddenItems.containsAll(item);
     }
@@ -144,37 +125,42 @@ public class ItemInfo {
         addMobSpawnerItem();
     }
 
-    public static void load(World world) {
+    public static void load() {
         addVanillaBlockProperties();
         addDefaultDropDowns();
         searchItems();
         parseModItems();
-        ItemMobSpawner.loadSpawners(world);
+        ItemMobSpawner.loadSpawners();
         addSpawnEggs();
         addInfiniteHandlers();
         addInputHandlers();
         addIDDumps();
-        addHiddenItemFilter();
-        addSearchOptimisation();
-    }
+        addSearchProviders();
+        RecipeItemInputHandler.load();
+        PresetsList.load();
 
-    private static void addSearchOptimisation() {
-        ItemList.loadCallbacks.add(ItemInfo::populateSearchMap);
-    }
-
-    private static void populateSearchMap() {
-        /* Create a snapshot of the current keys in the cache */
-        HashSet<ItemStackKey> oldItems = new HashSet<>(itemSearchNames.keySet());
-        for (ItemStack stack : ItemList.items) {
-            /* Populate each entry and remove it from the snapshot */
-            getSearchName(stack);
-            oldItems.remove(new ItemStackKey(stack));
+        if (NEIClientConfig.enableItemUntranslator()) {
+            ItemUntranslator.getInstance().load();
         }
-        itemSearchNames.keySet().removeAll(oldItems);
     }
 
-    private static void addHiddenItemFilter() {
-        API.addItemFilter(() -> item -> !hiddenItems.contains(item));
+    private static void addSearchProviders() {
+        API.addSearchProvider(
+                new SearchParserProvider('\0', "default", EnumChatFormatting.RESET, PatternItemFilter::new) {
+
+                    @Override
+                    public SearchMode getSearchMode() {
+                        return SearchMode.ALWAYS;
+                    }
+
+                });
+        API.addSearchProvider(
+                new SearchParserProvider('@', "modName", EnumChatFormatting.LIGHT_PURPLE, ModNameFilter::new));
+        API.addSearchProvider(
+                new SearchParserProvider('$', "oreDict", EnumChatFormatting.AQUA, OreDictionaryFilter::new));
+        API.addSearchProvider(new SearchParserProvider('#', "tooltip", EnumChatFormatting.YELLOW, TooltipFilter::new));
+        API.addSearchProvider(
+                new SearchParserProvider('&', "identifier", EnumChatFormatting.GOLD, IdentifierFilter::new));
     }
 
     private static void addIDDumps() {
@@ -209,7 +195,7 @@ public class ItemInfo {
             public String[] dump(Block block, int id, String name) {
                 final Item item = Item.getItemFromBlock(block);
                 return new String[] { name, Integer.toString(id), Boolean.toString(item != null),
-                        ItemInfo.itemOwners.get(block), block.getClass().getCanonicalName(),
+                        ItemInfo.itemOwners.get(item), block.getClass().getCanonicalName(),
                         item != null ? EnumChatFormatting.getTextWithoutFormattingCodes(
                                 GuiContainerManager.itemDisplayNameShort(new ItemStack(item))) : "null" };
             }
@@ -288,7 +274,8 @@ public class ItemInfo {
 
     @SuppressWarnings("unchecked")
     private static void parseModItems() {
-        HashMap<String, ItemStackSet> modSubsets = new HashMap<>();
+        final Map<String, ItemStackSet> modSubsets = new HashMap<>();
+
         for (Item item : (Iterable<Item>) Item.itemRegistry) {
             UniqueIdentifier ident = null;
             try {
@@ -300,14 +287,12 @@ public class ItemInfo {
                 continue;
             }
 
-            String modId = ident.modId;
-            itemOwners.put(item, modId);
-            ItemStackSet itemset = modSubsets.get(modId);
-            if (itemset == null) modSubsets.put(modId, itemset = new ItemStackSet());
-            itemset.with(item);
+            itemOwners.put(item, ident.modId);
+            modSubsets.computeIfAbsent(ident.modId, i -> new ItemStackSet()).with(item);
         }
 
         API.addSubset("Mod.Minecraft", modSubsets.remove("minecraft"));
+
         for (Entry<String, ItemStackSet> entry : modSubsets.entrySet()) {
             ModContainer mc = FMLCommonHandler.instance().findContainerFor(entry.getKey());
             if (mc == null) NEIClientConfig.logger.error("Missing container for " + entry.getKey());
@@ -316,7 +301,6 @@ public class ItemInfo {
     }
 
     private static void addInputHandlers() {
-        GuiContainerManager.addInputHandler(new RecipeItemInputHandler());
         GuiContainerManager.addInputHandler(new PopupInputHandler());
     }
 
@@ -344,44 +328,29 @@ public class ItemInfo {
     }
 
     private static void addDefaultDropDowns() {
+        final Item mob_spawner = Item.getItemFromBlock(Blocks.mob_spawner);
         API.addSubset("Items", item -> Block.getBlockFromItem(item.getItem()) == Blocks.air);
         API.addSubset("Blocks", item -> Block.getBlockFromItem(item.getItem()) != Blocks.air);
-        API.addSubset("Blocks.MobSpawners", ItemStackSet.of(Blocks.mob_spawner));
+        API.addSubset("Blocks.MobSpawners", item -> item.getItem() == mob_spawner);
     }
 
     @SuppressWarnings("unchecked")
     private static void searchItems() {
-        ItemStackSet tools = new ItemStackSet();
-        ItemStackSet picks = new ItemStackSet();
-        ItemStackSet shovels = new ItemStackSet();
-        ItemStackSet axes = new ItemStackSet();
-        ItemStackSet hoes = new ItemStackSet();
-        ItemStackSet swords = new ItemStackSet();
-        ItemStackSet chest = new ItemStackSet();
-        ItemStackSet helmets = new ItemStackSet();
-        ItemStackSet legs = new ItemStackSet();
-        ItemStackSet boots = new ItemStackSet();
-        ItemStackSet other = new ItemStackSet();
-        ItemStackSet ranged = new ItemStackSet();
-        ItemStackSet food = new ItemStackSet();
-        ItemStackSet potioningredients = new ItemStackSet();
-
-        ArrayList<ItemStackSet> creativeTabRanges = new ArrayList<>(CreativeTabs.creativeTabArray.length);
-        List<ItemStack> stackList = new LinkedList<>();
+        final Map<Integer, ItemStackSet> creativeTabRanges = new HashMap<>();
+        final List<ItemStack> stackList = new LinkedList<>();
 
         for (Item item : (Iterable<Item>) Item.itemRegistry) {
             if (item == null) continue;
 
             for (CreativeTabs itemTab : item.getCreativeTabs()) {
                 if (itemTab != null) {
-                    while (itemTab.getTabIndex() >= creativeTabRanges.size()) creativeTabRanges.add(null);
-                    ItemStackSet set = creativeTabRanges.get(itemTab.getTabIndex());
-                    if (set == null) creativeTabRanges.set(itemTab.getTabIndex(), set = new ItemStackSet());
+                    final ItemStackSet itemset = creativeTabRanges
+                            .computeIfAbsent(itemTab.getTabIndex(), i -> new ItemStackSet());
 
                     try {
                         stackList.clear();
                         item.getSubItems(item, itemTab, stackList);
-                        for (ItemStack stack : stackList) set.add(stack);
+                        itemset.addAll(stackList);
                     } catch (Exception e) {
                         NEIClientConfig.logger
                                 .error("Error loading sub-items for: " + item + ". Tab: " + itemTab.getTabLabel(), e);
@@ -389,41 +358,13 @@ public class ItemInfo {
                 }
             }
 
-            if (item.isDamageable()) {
-                tools.with(item);
-                if (item instanceof ItemPickaxe) picks.with(item);
-                else if (item instanceof ItemSpade) shovels.with(item);
-                else if (item instanceof ItemAxe) axes.with(item);
-                else if (item instanceof ItemHoe) hoes.with(item);
-                else if (item instanceof ItemSword) swords.with(item);
-                else if (item instanceof ItemArmor) switch (((ItemArmor) item).armorType) {
-                    case 0:
-                        helmets.with(item);
-                        break;
-                    case 1:
-                        chest.with(item);
-                        break;
-                    case 2:
-                        legs.with(item);
-                        break;
-                    case 3:
-                        boots.with(item);
-                        break;
-                }
-                else if (item == Items.arrow || item == Items.bow) ranged.with(item);
-                else if (item == Items.fishing_rod || item == Items.flint_and_steel || item == Items.shears)
-                    other.with(item);
-            }
-
-            if (item instanceof ItemFood) food.with(item);
-
             try {
-                LinkedList<ItemStack> subItems = new LinkedList<>();
+                final List<ItemStack> subItems = new LinkedList<>();
                 item.getSubItems(item, null, subItems);
+
                 for (ItemStack stack : subItems) {
                     if (item.isPotionIngredient(stack) && item.getPotionEffect(stack) != null) {
                         BrewingRecipeHandler.ingredients.add(stack);
-                        potioningredients.add(stack);
                     }
                 }
 
@@ -431,25 +372,33 @@ public class ItemInfo {
                 NEIClientConfig.logger.error("Error loading brewing ingredients for: " + item, e);
             }
         }
-        API.addSubset("Items.Tools.Pickaxes", picks);
-        API.addSubset("Items.Tools.Shovels", shovels);
-        API.addSubset("Items.Tools.Axes", axes);
-        API.addSubset("Items.Tools.Hoes", hoes);
-        API.addSubset("Items.Tools.Other", other);
-        API.addSubset("Items.Weapons.Swords", swords);
-        API.addSubset("Items.Weapons.Ranged", ranged);
-        API.addSubset("Items.Armor.Chestplates", chest);
-        API.addSubset("Items.Armor.Leggings", legs);
-        API.addSubset("Items.Armor.Helmets", helmets);
-        API.addSubset("Items.Armor.Boots", boots);
-        API.addSubset("Items.Food", food);
-        API.addSubset("Items.Potions.Ingredients", potioningredients);
+
+        API.addSubset("Items.Tools.Pickaxes", item -> item.getItem() instanceof ItemPickaxe);
+        API.addSubset("Items.Tools.Shovels", item -> item.getItem() instanceof ItemSpade);
+        API.addSubset("Items.Tools.Axes", item -> item.getItem() instanceof ItemAxe);
+        API.addSubset("Items.Tools.Hoes", item -> item.getItem() instanceof ItemHoe);
+        API.addSubset(
+                "Items.Tools.Other",
+                item -> item.getItem() == Items.fishing_rod || item.getItem() == Items.flint_and_steel
+                        || item.getItem() == Items.shears);
+        API.addSubset("Items.Weapons.Swords", item -> item.getItem() instanceof ItemSword);
+        API.addSubset("Items.Weapons.Ranged", item -> item.getItem() == Items.arrow || item.getItem() == Items.bow);
+        API.addSubset("Items.Armor.Helmets", item -> item.getItem() instanceof ItemArmor armor && armor.armorType == 0);
+        API.addSubset(
+                "Items.Armor.Chestplates",
+                item -> item.getItem() instanceof ItemArmor armor && armor.armorType == 1);
+        API.addSubset(
+                "Items.Armor.Leggings",
+                item -> item.getItem() instanceof ItemArmor armor && armor.armorType == 2);
+        API.addSubset("Items.Armor.Boots", item -> item.getItem() instanceof ItemArmor armor && armor.armorType == 3);
+        API.addSubset("Items.Food", item -> item.getItem() instanceof ItemFood);
+        API.addSubset("Items.Potions.Ingredients", BrewingRecipeHandler.ingredients);
 
         for (CreativeTabs tab : CreativeTabs.creativeTabArray) {
-            if (tab.getTabIndex() >= creativeTabRanges.size()) continue;
-            ItemStackSet set = creativeTabRanges.get(tab.getTabIndex());
-            if (set != null && !set.isEmpty())
-                API.addSubset("CreativeTabs." + I18n.format(tab.getTranslatedTabLabel()), set);
+            final ItemStackSet itemset = creativeTabRanges.get(tab.getTabIndex());
+            if (itemset != null && !itemset.isEmpty()) {
+                API.addSubset("CreativeTabs." + I18n.format(tab.getTranslatedTabLabel()), itemset);
+            }
         }
 
         BrewingRecipeHandler.searchPotions();
@@ -460,7 +409,6 @@ public class ItemInfo {
         addEntityEgg(EntityIronGolem.class, 0xC5C2C1, 0xffe1cc);
     }
 
-    @SuppressWarnings("unchecked")
     private static void addEntityEgg(Class<?> entity, int i, int j) {
         int id = (Integer) EntityList.classToIDMapping.get(entity);
         EntityList.entityEggs.put(id, new EntityEggInfo(id, i, j));
@@ -473,30 +421,38 @@ public class ItemInfo {
         Block mouseoverBlock = world.getBlock(x, y, z);
 
         ArrayList<ItemStack> items = new ArrayList<>();
-
         ArrayList<IHighlightHandler> handlers = new ArrayList<>();
+
         if (highlightIdentifiers.containsKey(null)) handlers.addAll(highlightIdentifiers.get(null));
         if (highlightIdentifiers.containsKey(mouseoverBlock)) handlers.addAll(highlightIdentifiers.get(mouseoverBlock));
+
         for (IHighlightHandler ident : handlers) {
-            ItemStack item = ident.identifyHighlight(world, player, hit);
+            final ItemStack item = ident.identifyHighlight(world, player, hit);
             if (item != null) items.add(item);
         }
 
-        if (items.size() > 0) return items;
+        if (!items.isEmpty()) return items;
 
-        ItemStack pick = mouseoverBlock.getPickBlock(hit, world, x, y, z, player);
-        if (pick != null) items.add(pick);
+        try {
+            final ItemStack pick = mouseoverBlock.getPickBlock(hit, world, x, y, z, player);
+            if (pick != null) items.add(pick);
+        } catch (Exception ignored) {}
+
+        if (!items.isEmpty()) return items;
+
+        if (mouseoverBlock instanceof IShearable shearable) {
+            if (shearable.isShearable(new ItemStack(Items.shears), world, x, y, z)) {
+                items.addAll(shearable.onSheared(new ItemStack(Items.shears), world, x, y, z, 0));
+            }
+        }
+
+        if (!items.isEmpty()) return items;
 
         try {
             items.addAll(mouseoverBlock.getDrops(world, x, y, z, world.getBlockMetadata(x, y, z), 0));
         } catch (Exception ignored) {}
-        if (mouseoverBlock instanceof IShearable) {
-            IShearable shearable = (IShearable) mouseoverBlock;
-            if (shearable.isShearable(new ItemStack(Items.shears), world, x, y, z))
-                items.addAll(shearable.onSheared(new ItemStack(Items.shears), world, x, y, z, 0));
-        }
 
-        if (items.size() == 0) items.add(0, new ItemStack(mouseoverBlock, 1, world.getBlockMetadata(x, y, z)));
+        if (items.isEmpty()) items.add(new ItemStack(mouseoverBlock, 1, world.getBlockMetadata(x, y, z)));
 
         return items;
     }
@@ -516,10 +472,8 @@ public class ItemInfo {
         return retString;
     }
 
+    @Deprecated
     public static String getSearchName(ItemStack stack) {
-        return itemSearchNames.computeIfAbsent(
-                new ItemStackKey(stack),
-                key -> EnumChatFormatting.getTextWithoutFormattingCodes(
-                        GuiContainerManager.concatenatedDisplayName(key.stack, true).toLowerCase()));
+        return GuiContainerManager.concatenatedDisplayName(stack, true).toLowerCase();
     }
 }

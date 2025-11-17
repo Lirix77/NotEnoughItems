@@ -31,8 +31,11 @@ import static codechicken.nei.NEIClientUtils.toggleMagnetMode;
 import static codechicken.nei.NEIClientUtils.toggleRaining;
 import static codechicken.nei.NEIClientUtils.translate;
 
+import java.awt.Point;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
 
 import net.minecraft.client.Minecraft;
@@ -62,6 +65,8 @@ import codechicken.nei.guihook.IContainerDrawHandler;
 import codechicken.nei.guihook.IContainerInputHandler;
 import codechicken.nei.guihook.IContainerObjectHandler;
 import codechicken.nei.guihook.IContainerTooltipHandler;
+import codechicken.nei.recipe.AutoCraftingManager;
+import codechicken.nei.recipe.DebugHandlerWidget;
 import codechicken.nei.recipe.GuiRecipeTab;
 import codechicken.nei.recipe.RecipeCatalysts;
 
@@ -76,28 +81,24 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
     /**
      * Sorted bottom first
      */
-    private static TreeSet<Widget> drawWidgets = new TreeSet<>(new WidgetZOrder(false));
+    private static Set<Widget> drawWidgets = new TreeSet<>(new WidgetZOrder(false));
     /**
      * Sorted top first
      */
-    private static TreeSet<Widget> controlWidgets = new TreeSet<>(new WidgetZOrder(true));
+    private static Set<Widget> controlWidgets = new TreeSet<>(new WidgetZOrder(true));
 
     public static ItemPanel itemPanel;
     public static BookmarkPanel bookmarkPanel;
     public static SubsetWidget dropDown;
-    public static PresetsWidget presetsPanel;
     public static SearchField searchField;
+    public static ItemZoom itemZoom;
+    public static DebugHandlerWidget recipeHandlerWidget;
 
     public static ButtonCycled options;
     public static ButtonCycled bookmarksButton;
 
-    @Deprecated
     public static Button more;
-
-    @Deprecated
     public static Button less;
-
-    @Deprecated
     public static ItemQuantityField quantity;
 
     public static Button delete;
@@ -137,16 +138,14 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
     @Override
     public void onPreDraw(GuiContainer gui) {
-        if (!isHidden() && isEnabled() && gui instanceof InventoryEffectRenderer) // Reset the gui to the center of the
-                                                                                  // screen, for potion effect offsets
-        // etc
-        {
+        // Reset the gui to the center of the screen, for potion effect offsets etc
+        if (isEnabled() && gui instanceof InventoryEffectRenderer) {
             gui.guiLeft = (gui.width - gui.xSize) / 2;
             gui.guiTop = (gui.height - gui.ySize) / 2;
 
             if (gui instanceof GuiContainerCreative && gui.buttonList.size() >= 2) {
-                GuiButton button1 = (GuiButton) gui.buttonList.get(0);
-                GuiButton button2 = (GuiButton) gui.buttonList.get(1);
+                GuiButton button1 = gui.buttonList.get(0);
+                GuiButton button2 = gui.buttonList.get(1);
                 button1.xPosition = gui.guiLeft;
                 button2.xPosition = gui.guiLeft + gui.xSize - 20;
             }
@@ -167,14 +166,18 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
     public void onMouseClicked(GuiContainer gui, int mousex, int mousey, int button) {
         if (isHidden()) return;
 
-        for (Widget widget : controlWidgets) widget.onGuiClick(mousex, mousey);
+        for (Widget widget : controlWidgets) {
+            widget.onGuiClick(mousex, mousey);
+        }
     }
 
     @Override
     public boolean mouseClicked(GuiContainer gui, int mousex, int mousey, int button) {
         if (isHidden()) return false;
 
-        if (!isEnabled()) return options.contains(mousex, mousey) && options.handleClick(mousex, mousey, button);
+        if (!isEnabled()) {
+            return options.contains(mousex, mousey) && options.handleClick(mousex, mousey, button);
+        }
 
         for (Widget widget : controlWidgets) {
             widget.onGuiClick(mousex, mousey);
@@ -188,10 +191,22 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
     @Override
     public boolean objectUnderMouse(GuiContainer gui, int mousex, int mousey) {
-        if (!isHidden() && isEnabled())
-            for (Widget widget : drawWidgets) if (widget.contains(mousex, mousey)) return true;
+        return getWidgetUnderMouse(mousex, mousey) != null;
+    }
 
-        return false;
+    public Widget getWidgetUnderMouse(int mousex, int mousey) {
+
+        if (isHidden() || !isEnabled()) {
+            return null;
+        }
+
+        for (Widget widget : controlWidgets) {
+            if (widget.contains(mousex, mousey)) {
+                return widget;
+            }
+        }
+
+        return null;
     }
 
     public boolean keyTyped(GuiContainer gui, char keyChar, int keyID) {
@@ -216,12 +231,11 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
         }
 
         if (NEIClientConfig.isKeyHashDown("gui.hide_bookmarks")) {
-            toggleBooleanSetting("inventory.bookmarksEnabled");
+            toggleBooleanSetting("inventory.bookmarks.enabled");
             return true;
         }
 
-        if (NEIClientConfig.isKeyHashDown("gui.next_tooltip")) {
-            GuiContainerManager.incrementTooltipPage();
+        if (NEIClientConfig.isKeyHashDown("gui.next_tooltip") && GuiContainerManager.incrementTooltipPage()) {
             return true;
         }
 
@@ -247,12 +261,12 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
     @Override
     public ItemStack getStackUnderMouse(GuiContainer gui, int mousex, int mousey) {
-        if (!isHidden() && isEnabled()) {
-            for (Widget widget : drawWidgets) {
-                ItemStack stack = widget.getStackMouseOver(mousex, mousey);
-                if (stack != null) return stack;
-            }
+        final Widget focused = getWidgetUnderMouse(mousex, mousey);
+
+        if (focused != null) {
+            return focused.getStackMouseOver(mousex, mousey);
         }
+
         return null;
     }
 
@@ -288,9 +302,19 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
     @Override
     public List<String> handleTooltip(GuiContainer gui, int mousex, int mousey, List<String> currenttip) {
+
         if (!isHidden() && isEnabled() && GuiContainerManager.shouldShowTooltip(gui)) {
-            for (Widget widget : drawWidgets) currenttip = widget.handleTooltip(mousex, mousey, currenttip);
+            final Widget focused = getWidgetUnderMouse(mousex, mousey);
+
+            if (focused != null) {
+                currenttip = focused.handleTooltip(mousex, mousey, currenttip);
+
+                if (focused instanceof IContainerTooltipHandler tip) {
+                    currenttip = tip.handleTooltip(gui, mousex, mousey, currenttip);
+                }
+            }
         }
+
         return currenttip;
     }
 
@@ -307,32 +331,64 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             currenttip.set(0, mainname);
         }
 
+        if (!isHidden() && isEnabled() && GuiContainerManager.shouldShowTooltip(gui)) {
+            final Point mouse = GuiDraw.getMousePosition();
+            final Widget focused = getWidgetUnderMouse(mouse.x, mouse.y);
+
+            if (focused instanceof IContainerTooltipHandler tip) {
+                currenttip = tip.handleItemDisplayName(gui, stack, currenttip);
+            }
+        }
+
         return currenttip;
     }
 
     @Override
     public List<String> handleItemTooltip(GuiContainer gui, ItemStack itemstack, int mousex, int mousey,
             List<String> currenttip) {
+
+        if (!isHidden() && isEnabled() && GuiContainerManager.shouldShowTooltip(gui)) {
+            final Widget focused = getWidgetUnderMouse(mousex, mousey);
+
+            if (focused != null) {
+                currenttip = focused.handleItemTooltip(itemstack, mousex, mousey, currenttip);
+            }
+
+            if (focused instanceof IContainerTooltipHandler tip) {
+                currenttip = tip.handleItemTooltip(gui, itemstack, mousex, mousey, currenttip);
+            }
+        }
+
         return currenttip;
+    }
+
+    @Override
+    public Map<String, String> handleHotkeys(GuiContainer gui, int mousex, int mousey, Map<String, String> hotkeys) {
+
+        if (!isHidden() && isEnabled() && GuiContainerManager.shouldShowTooltip(gui)) {
+            final Widget focused = getWidgetUnderMouse(mousex, mousey);
+
+            if (focused != null) {
+                hotkeys = focused.handleHotkeys(mousex, mousey, hotkeys);
+
+                if (focused instanceof IContainerTooltipHandler tip) {
+                    hotkeys = tip.handleHotkeys(gui, mousex, mousey, hotkeys);
+                }
+            }
+
+        }
+
+        return hotkeys;
     }
 
     public static void layout(GuiContainer gui) {
         VisiblityData visiblity = new VisiblityData();
-
-        if (isHidden()) visiblity.showNEI = false;
-
-        if (isBookmarkPanelHidden()) visiblity.showBookmarkPanel = false;
-
-        if (gui.height - gui.ySize <= 40 && NEIClientConfig.isSearchWidgetCentered())
-            visiblity.showSearchSection = false;
-
-        if (visiblity.showBookmarkPanel || gui.guiTop <= 20) visiblity.showSubsetDropdown = false;
-
-        if (!visiblity.showBookmarkPanel || gui.guiTop <= 20) visiblity.showPresetsDropdown = false;
-
-        if (gui.guiLeft - 4 < 76) visiblity.showWidgets = false;
-
-        if (!itemsLoaded) visiblity.showPresetsDropdown = false;
+        visiblity.showNEI = !isHidden();
+        visiblity.showBookmarkPanel = !isBookmarkPanelHidden();
+        visiblity.showSearchSection = !(gui.height - gui.ySize <= 40 && NEIClientConfig.isSearchWidgetCentered());
+        visiblity.showSubsetDropdown = NEIClientConfig.showSubsetWidget()
+                && (gui.guiTop > 20 || visiblity.showSearchSection && !NEIClientConfig.subsetWidgetOnTop());
+        visiblity.showWidgets = gui.guiLeft - 4 > 76;
 
         try {
             GuiInfo.readLock.lock();
@@ -355,9 +411,13 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
         bookmarkPanel = ItemPanels.bookmarkPanel;
         bookmarkPanel.init();
 
+        itemZoom = new ItemZoom();
+
+        recipeHandlerWidget = new DebugHandlerWidget();
+
         dropDown = new SubsetWidget();
-        presetsPanel = new PresetsWidget();
         searchField = new SearchField("search");
+        API.addItemFilter(searchField);
 
         options = new ButtonCycled(3) {
 
@@ -379,7 +439,8 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             @Override
             public boolean onButtonPress(boolean rightclick) {
                 if (!rightclick) {
-                    if (Keyboard.getEventKeyState() && getIsAccessibleControlEventKey()) {
+                    if (Keyboard.getEventKeyState() && getIsAccessibleControlEventKey()
+                            && NEIClientConfig.canChangeCheatMode()) {
                         NEIClientConfig.cycleSetting("inventory.cheatmode", 3);
                     } else {
                         if (Keyboard.getEventKeyState() && (Keyboard.getEventKey() == Keyboard.KEY_LSHIFT
@@ -403,7 +464,10 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
                 else if (cheatMode == 2) modeColor = EnumChatFormatting.RED.toString();
                 String controlKeyLocalization = translate(Minecraft.isRunningOnMac ? "key.ctrl.mac" : "key.ctrl");
                 tooltip.add(modeColor + translate("inventory.options.tip.cheatmode." + cheatMode));
-                tooltip.add(modeColor + translate("inventory.options.tip.cheatmode.disable", controlKeyLocalization));
+                if (NEIClientConfig.canChangeCheatMode()) {
+                    tooltip.add(
+                            modeColor + translate("inventory.options.tip.cheatmode.disable", controlKeyLocalization));
+                }
             }
 
             @Override
@@ -422,7 +486,7 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
             @Override
             public boolean onButtonPress(boolean rightclick) {
-                NEIClientConfig.toggleBooleanSetting("inventory.bookmarksEnabled");
+                NEIClientConfig.toggleBooleanSetting("inventory.bookmarks.enabled");
                 return true;
             }
 
@@ -436,9 +500,43 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             }
         };
 
-        more = ItemPanels.itemPanel.more;
-        less = ItemPanels.itemPanel.less;
-        quantity = ItemPanels.itemPanel.quantity;
+        more = new Button("+") {
+
+            @Override
+            public boolean onButtonPress(boolean rightclick) {
+                if (rightclick) return false;
+
+                int modifier = NEIClientUtils.controlKey() ? 64 : NEIClientUtils.shiftKey() ? 10 : 1;
+                int quantity = NEIClientConfig.getItemQuantity() + modifier;
+
+                if (quantity < 0) {
+                    quantity = 0;
+                }
+
+                LayoutManager.quantity.setText(Integer.toString(quantity));
+                return true;
+            }
+        };
+        less = new Button("-") {
+
+            @Override
+            public boolean onButtonPress(boolean rightclick) {
+                if (rightclick) return false;
+
+                int modifier = NEIClientUtils.controlKey() ? -64 : NEIClientUtils.shiftKey() ? -10 : -1;
+                int quantity = NEIClientConfig.getItemQuantity() + modifier;
+
+                if (quantity < 0) {
+                    quantity = 0;
+                }
+
+                LayoutManager.quantity.setText(Integer.toString(quantity));
+                return true;
+            }
+        };
+
+        quantity = new ItemQuantityField("quantity");
+
         delete = new Button() {
 
             @Override
@@ -614,12 +712,12 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
             if (!itemsLoaded) {
                 ItemList.loadItems.restart();
-                itemsLoaded = true;
             }
-            overlayRenderer = null;
 
+            overlayRenderer = null;
             getLayoutStyle().init();
             layout(gui);
+            AutoFocusWidget.instance.load(gui);
         }
 
         NEIController.load(gui);
@@ -651,14 +749,15 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
         addWidget(options);
         addWidget(bookmarksButton);
+
+        if (visiblity.showItemPanel && NEIClientConfig.showItemQuantityWidget()) {
+            addWidget(quantity);
+            addWidget(more);
+            addWidget(less);
+        }
+
         if (visiblity.showItemPanel) {
-
-            if (PresetsWidget.inEditMode()) {
-                drawWidgets.add(itemPanel);
-            } else {
-                addWidget(itemPanel);
-            }
-
+            addWidget(itemPanel);
             itemPanel.setVisible();
         }
 
@@ -667,13 +766,13 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             bookmarkPanel.setVisible();
         }
 
-        if (visiblity.showPresetsDropdown) {
-            addWidget(presetsPanel);
-        }
-
-        searchField.setVisible(visiblity.showSearchSection);
-        if (visiblity.showSearchSection) {
+        if (visiblity.showSearchSection && NEIClientConfig.isSearchWidgetCentered()
+                || visiblity.showItemPanel && !NEIClientConfig.isSearchWidgetCentered()) {
+            searchField.setVisible(true);
             addWidget(searchField);
+        } else {
+            searchField.setVisible(false);
+            searchField.setFocus(false);
         }
 
         if (visiblity.showUtilityButtons) {
@@ -688,10 +787,14 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             if (canPerformAction("delete")) addWidget(delete);
         }
 
+        addWidget(itemZoom);
+
         if (visiblity.showSubsetDropdown) {
-            // Bookmarks or Subset/dropdown
             addWidget(dropDown);
         }
+
+        addWidget(recipeHandlerWidget);
+        recipeHandlerWidget.setVisible();
     }
 
     public static LayoutStyle getLayoutStyle(int id) {
@@ -722,7 +825,9 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
     public boolean mouseScrolled(GuiContainer gui, int mousex, int mousey, int scrolled) {
         if (isHidden() || !isEnabled()) return false;
 
-        for (Widget widget : drawWidgets) if (widget.onMouseWheel(scrolled, mousex, mousey)) return true;
+        for (Widget widget : controlWidgets) {
+            if (widget.onMouseWheel(scrolled, mousex, mousey)) return true;
+        }
 
         return false;
     }
@@ -732,7 +837,7 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
     @Override
     public boolean shouldShowTooltip(GuiContainer gui) {
-        return itemPanel.draggedStack == null && !bookmarkPanel.inEditingState();
+        return itemPanel.draggedStack == null && !bookmarkPanel.inEditingState() && !AutoCraftingManager.processing();
     }
 
     /** Note: this method isn't actually used by this mod, but NEI add-ons might need it. */
@@ -760,13 +865,11 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
             ItemStack item = slot.getStack();
 
             if (item == null ? !getSearchExpression().equals("") : !searchField.getFilter().matches(item)) {
-                GL11.glDisable(GL11.GL_LIGHTING);
-                GL11.glDisable(GL11.GL_DEPTH_TEST);
-                GL11.glTranslatef(0, 0, 150);
-                drawRect(slot.xDisplayPosition, slot.yDisplayPosition, 16, 16, 0x80000000);
-                GL11.glTranslatef(0, 0, -150);
-                GL11.glEnable(GL11.GL_LIGHTING);
-                GL11.glEnable(GL11.GL_DEPTH_TEST);
+                NEIClientUtils.gl2DRenderContext(() -> {
+                    GL11.glTranslatef(0, 0, 150);
+                    drawRect(slot.xDisplayPosition, slot.yDisplayPosition, 16, 16, 0x80000000);
+                    GL11.glTranslatef(0, 0, -150);
+                });
             }
         }
 
@@ -811,6 +914,9 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
         final int ty2 = ty + 20 - h2 - te;
         final int tx2 = 200 - w2 - te;
 
+        final boolean is2DTexture = GL11.glGetBoolean(GL11.GL_TEXTURE_2D);
+
+        GL11.glEnable(GL11.GL_TEXTURE_2D);
         changeTexture("textures/gui/widgets.png");
         drawTexturedModalRect(x, y, tx1, ty1, w1, h1); // top left
         drawTexturedModalRect(x, y2, tx1, ty2, w1, h2); // bottom left
@@ -823,18 +929,14 @@ public class LayoutManager implements IContainerInputHandler, IContainerTooltipH
 
         drawTexturedModalRect(x2, y, tx2, ty1, w2, h1); // top right
         drawTexturedModalRect(x2, y2, tx2, ty2, w2, h2); // bottom right
+
+        if (!is2DTexture) GL11.glDisable(GL11.GL_TEXTURE_2D);
     }
 
     public static void drawItemPresenceOverlay(int slotX, int slotY, boolean isPresent, boolean slotHighlight) {
 
         if (slotHighlight) {
-            GL11.glDisable(GL11.GL_LIGHTING);
-            GL11.glDisable(GL11.GL_DEPTH_TEST);
-            GL11.glTranslatef(0, 0, -150);
-            drawRect(slotX, slotY, 16, 16, isPresent ? 0x8000AA00 : 0x80AA0000);
-            GL11.glTranslatef(0, 0, 150);
-            GL11.glEnable(GL11.GL_LIGHTING);
-            GL11.glEnable(GL11.GL_DEPTH_TEST);
+            NEIClientUtils.gl2DRenderContext(() -> drawRect(slotX, slotY, 16, 16, isPresent ? 0x8000AA00 : 0x80AA0000));
         } else {
             Image icon = itemPresenceOverlays[isPresent ? 1 : 0];
             drawIcon(slotX + 16 - icon.width, slotY + 16 - icon.height, icon);

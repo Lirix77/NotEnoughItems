@@ -17,6 +17,7 @@ import org.lwjgl.opengl.GL11;
 
 import codechicken.lib.math.MathHelper;
 import codechicken.nei.KeyManager.IKeyStateTracker;
+import cpw.mods.fml.relauncher.ReflectionHelper;
 
 public class WorldOverlayRenderer implements IKeyStateTracker {
 
@@ -26,19 +27,22 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
     private static byte[] mobSpawnCache;
     private static long mobOverlayUpdateTime;
     private static String oregenPatternName;
-    private static boolean hasOregenPatternBeenSet = false;
 
     public static void reset() {
         mobOverlay = 0;
         chunkOverlay = 0;
-        hasOregenPatternBeenSet = false;
+        oregenPatternName = null;
     }
 
     @Override
     public void tickKeyStates() {
         if (Minecraft.getMinecraft().currentScreen != null) return;
 
-        if (KeyManager.keyStates.get("world.moboverlay").down) mobOverlay = (mobOverlay + 1) % 2;
+        if (KeyManager.keyStates.get("world.moboverlay").down) {
+            mobOverlay = (mobOverlay + 1) % 2;
+            NEIClientUtils
+                    .printChatMessage(new ChatComponentText(NEIClientUtils.translate("chat.moboverlay." + mobOverlay)));
+        }
         if (KeyManager.keyStates.get("world.chunkoverlay").down) {
             chunkOverlay = (chunkOverlay + 1) % (NEIModContainer.isGT5Loaded() ? 4 : 3);
             // 0-2 (or 3 with gt)
@@ -73,9 +77,11 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
         }
 
         World world = entity.worldObj;
+        int worldHeight = world.getHeight();
+
         int x1 = (int) entity.posX;
         int z1 = (int) entity.posZ;
-        int y1 = (int) MathHelper.clip(entity.posY, 16, world.getHeight() - 16);
+        int y1 = (int) MathHelper.clip(entity.posY, 16, worldHeight - 16);
 
         for (int i = 0; i <= 32; i++) {
             int x = x1 - 16 + i;
@@ -94,6 +100,12 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
 
                 for (int k = 0; k <= 32; k++) {
                     int y = y1 - 16 + k;
+
+                    if (y >= worldHeight) {
+                        mobSpawnCache[bufIndex + k] = -1;
+                        continue;
+                    }
+
                     if (y > maxHeight) {
                         mobSpawnCache[bufIndex + k] = -1;
                         break;
@@ -177,6 +189,10 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
     private static final AxisAlignedBB aabb = AxisAlignedBB.getBoundingBox(0, 0, 0, 0, 0, 0);
 
     private static byte getSpawnMode(Chunk chunk, int x, int y, int z) {
+        if (y >= chunk.worldObj.getHeight()) {
+            return 0;
+        }
+
         if (chunk.getSavedLightValue(EnumSkyBlock.Block, x & 15, y, z & 15) >= 8
                 || !SpawnerAnimals.canCreatureTypeSpawnAtLocation(EnumCreatureType.monster, chunk.worldObj, x, y, z)) {
             return 0;
@@ -204,7 +220,9 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
         GL11.glBlendFunc(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA);
         GL11.glDisable(GL11.GL_LIGHTING);
         GL11.glLineWidth(1.5F);
-        GL11.glBegin(GL11.GL_LINES);
+
+        final Tessellator tess = Tessellator.instance;
+        tess.startDrawing(GL11.GL_LINES);
 
         for (int cx = -4; cx <= 4; cx++) for (int cz = -4; cz <= 4; cz++) {
             double x1 = ((entity.chunkCoordX + cx) << 4) - intOffsetX;
@@ -230,22 +248,22 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
 
             double dist = Math.pow(1.5, -(cx * cx + cz * cz));
 
-            GL11.glColor4d(0.9, 0, 0, dist);
+            tess.setColorRGBA_F(0.9F, 0, 0, (float) dist);
             if (cx >= 0 && cz >= 0) {
-                GL11.glVertex3d(x2, y1, z2);
-                GL11.glVertex3d(x2, y2, z2);
+                tess.addVertex(x2, y1, z2);
+                tess.addVertex(x2, y2, z2);
             }
             if (cx >= 0 && cz <= 0) {
-                GL11.glVertex3d(x2, y1, z1);
-                GL11.glVertex3d(x2, y2, z1);
+                tess.addVertex(x2, y1, z1);
+                tess.addVertex(x2, y2, z1);
             }
             if (cx <= 0 && cz >= 0) {
-                GL11.glVertex3d(x1, y1, z2);
-                GL11.glVertex3d(x1, y2, z2);
+                tess.addVertex(x1, y1, z2);
+                tess.addVertex(x1, y2, z2);
             }
             if (cx <= 0 && cz <= 0) {
-                GL11.glVertex3d(x1, y1, z1);
-                GL11.glVertex3d(x1, y2, z1);
+                tess.addVertex(x1, y1, z1);
+                tess.addVertex(x1, y2, z1);
             }
 
             if (cx == 0 && cz == 0) {
@@ -266,40 +284,31 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
                     y1 -= intOffsetY;
                     y2 -= intOffsetY;
 
-                    GL11.glColor4d(0, 0.9, 0, 0.4);
+                    tess.setColorRGBA_F(0, 0.9F, 0, 0.4F);
                     for (double y = (int) y1; y <= y2; y++) {
-                        GL11.glVertex3d(x2, y, z1);
-                        GL11.glVertex3d(x2, y, z2);
-                        GL11.glVertex3d(x1, y, z1);
-                        GL11.glVertex3d(x1, y, z2);
-                        GL11.glVertex3d(x1, y, z2);
-                        GL11.glVertex3d(x2, y, z2);
-                        GL11.glVertex3d(x1, y, z1);
-                        GL11.glVertex3d(x2, y, z1);
+                        tess.addVertex(x2, y, z1);
+                        tess.addVertex(x2, y, z2);
+                        tess.addVertex(x1, y, z1);
+                        tess.addVertex(x1, y, z2);
+                        tess.addVertex(x1, y, z2);
+                        tess.addVertex(x2, y, z2);
+                        tess.addVertex(x1, y, z1);
+                        tess.addVertex(x2, y, z1);
                     }
                     for (double h = 1; h <= 15; h++) {
-                        GL11.glVertex3d(x1 + h, y1, z1);
-                        GL11.glVertex3d(x1 + h, y2, z1);
-                        GL11.glVertex3d(x1 + h, y1, z2);
-                        GL11.glVertex3d(x1 + h, y2, z2);
-                        GL11.glVertex3d(x1, y1, z1 + h);
-                        GL11.glVertex3d(x1, y2, z1 + h);
-                        GL11.glVertex3d(x2, y1, z1 + h);
-                        GL11.glVertex3d(x2, y2, z1 + h);
+                        tess.addVertex(x1 + h, y1, z1);
+                        tess.addVertex(x1 + h, y2, z1);
+                        tess.addVertex(x1 + h, y1, z2);
+                        tess.addVertex(x1 + h, y2, z2);
+                        tess.addVertex(x1, y1, z1 + h);
+                        tess.addVertex(x1, y2, z1 + h);
+                        tess.addVertex(x2, y1, z1 + h);
+                        tess.addVertex(x2, y2, z1 + h);
                     }
                 } else if (chunkOverlay == 3) {
-                    if (!hasOregenPatternBeenSet) {
-                        try {
-                            oregenPatternName = ((Enum<?>) Class.forName("gregtech.common.GT_Worldgenerator")
-                                    .getDeclaredField("oregenPattern").get(null)).name();
-                        } catch (Exception ignored) {
-                            oregenPatternName = "AXISSYMMETRICAL";
-                        }
-                        hasOregenPatternBeenSet = true;
-                    }
                     int gx1;
                     int gz1;
-                    if (oregenPatternName.equals("EQUAL_SPACING")) {
+                    if (getOregenPatternName().equals("EQUAL_SPACING")) {
                         // gt oregen uses new regular pattern
                         gx1 = ((Math.floorDiv(entity.chunkCoordX, 3) * 3) << 4) - intOffsetX;
                         gz1 = ((Math.floorDiv(entity.chunkCoordZ, 3) * 3) << 4) - intOffsetZ;
@@ -319,53 +328,69 @@ public class WorldOverlayRenderer implements IKeyStateTracker {
                     int gx2 = gx1 + 48;
                     int gz2 = gz1 + 48;
 
-                    GL11.glColor4d(0, 0.9, 0, 0.4);
+                    tess.setColorRGBA_F(0, 0.9F, 0, 0.4F);
                     for (double y = (int) y1; y <= y2; y++) {
-                        GL11.glVertex3d(gx2, y, gz1);
-                        GL11.glVertex3d(gx2, y, gz2);
-                        GL11.glVertex3d(gx1, y, gz1);
-                        GL11.glVertex3d(gx1, y, gz2);
-                        GL11.glVertex3d(gx1, y, gz2);
-                        GL11.glVertex3d(gx2, y, gz2);
-                        GL11.glVertex3d(gx1, y, gz1);
-                        GL11.glVertex3d(gx2, y, gz1);
+                        tess.addVertex(gx2, y, gz1);
+                        tess.addVertex(gx2, y, gz2);
+                        tess.addVertex(gx1, y, gz1);
+                        tess.addVertex(gx1, y, gz2);
+                        tess.addVertex(gx1, y, gz2);
+                        tess.addVertex(gx2, y, gz2);
+                        tess.addVertex(gx1, y, gz1);
+                        tess.addVertex(gx2, y, gz1);
                     }
                     for (double h = 4; h <= 44; h += 4) {
                         if (h % 16 == 0) {
                             continue;
                         }
-                        GL11.glVertex3d(gx1 + h, y1, gz1);
-                        GL11.glVertex3d(gx1 + h, y2, gz1);
-                        GL11.glVertex3d(gx1 + h, y1, gz2);
-                        GL11.glVertex3d(gx1 + h, y2, gz2);
-                        GL11.glVertex3d(gx1, y1, gz1 + h);
-                        GL11.glVertex3d(gx1, y2, gz1 + h);
-                        GL11.glVertex3d(gx2, y1, gz1 + h);
-                        GL11.glVertex3d(gx2, y2, gz1 + h);
+                        tess.addVertex(gx1 + h, y1, gz1);
+                        tess.addVertex(gx1 + h, y2, gz1);
+                        tess.addVertex(gx1 + h, y1, gz2);
+                        tess.addVertex(gx1 + h, y2, gz2);
+                        tess.addVertex(gx1, y1, gz1 + h);
+                        tess.addVertex(gx1, y2, gz1 + h);
+                        tess.addVertex(gx2, y1, gz1 + h);
+                        tess.addVertex(gx2, y2, gz1 + h);
                     }
 
-                    GL11.glColor4d(0, 0, 0.9, 0.4);
+                    tess.setColorRGBA_F(0, 0, 0.9F, 0.4F);
                     gx1 += 23;
                     gz1 += 23;
                     gx2 = gx1 + 1;
                     gz2 = gz1 + 1;
 
-                    GL11.glVertex3d(gx1, y1, gz1);
-                    GL11.glVertex3d(gx1, y2, gz1);
-                    GL11.glVertex3d(gx2, y1, gz1);
-                    GL11.glVertex3d(gx2, y2, gz1);
-                    GL11.glVertex3d(gx1, y1, gz2);
-                    GL11.glVertex3d(gx1, y2, gz2);
-                    GL11.glVertex3d(gx2, y1, gz2);
-                    GL11.glVertex3d(gx2, y2, gz2);
+                    tess.addVertex(gx1, y1, gz1);
+                    tess.addVertex(gx1, y2, gz1);
+                    tess.addVertex(gx2, y1, gz1);
+                    tess.addVertex(gx2, y2, gz1);
+                    tess.addVertex(gx1, y1, gz2);
+                    tess.addVertex(gx1, y2, gz2);
+                    tess.addVertex(gx2, y1, gz2);
+                    tess.addVertex(gx2, y2, gz2);
                 }
             }
         }
 
-        GL11.glEnd();
+        tess.draw();
         GL11.glEnable(GL11.GL_LIGHTING);
         GL11.glEnable(GL11.GL_TEXTURE_2D);
         GL11.glDisable(GL11.GL_BLEND);
+    }
+
+    private static String getOregenPatternName() {
+
+        if (oregenPatternName == null) {
+            try {
+                final ClassLoader loader = WorldOverlayRenderer.class.getClassLoader();
+                final Class<?> gtWorldGenerator = ReflectionHelper
+                        .getClass(loader, "gregtech.common.GTWorldgenerator", "gregtech.common.GT_Worldgenerator");
+                oregenPatternName = ((Enum<?>) gtWorldGenerator.getDeclaredField("oregenPattern").get(null)).name();
+            } catch (Exception ignored) {
+                oregenPatternName = "AXISSYMMETRICAL";
+            }
+        }
+
+        return oregenPatternName;
     }
 
     public static void load() {

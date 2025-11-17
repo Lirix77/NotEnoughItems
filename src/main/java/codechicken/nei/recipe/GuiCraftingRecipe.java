@@ -1,29 +1,32 @@
 package codechicken.nei.recipe;
 
-import static codechicken.lib.gui.GuiDraw.getMousePosition;
-
 import java.awt.Point;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.function.Function;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.item.ItemStack;
 
-import codechicken.nei.ItemPanel.ItemPanelSlot;
+import codechicken.lib.gui.GuiDraw;
+import codechicken.nei.FavoriteRecipes;
 import codechicken.nei.ItemPanels;
+import codechicken.nei.ItemsGrid.ItemsGridSlot;
 import codechicken.nei.NEIClientConfig;
 import codechicken.nei.NEIClientUtils;
-import codechicken.nei.PositionedStack;
-import codechicken.nei.recipe.stackinfo.GTFluidStackStringifyHandler;
+import codechicken.nei.bookmark.BookmarkItem.BookmarkItemType;
+import codechicken.nei.bookmark.BookmarksGridSlot;
+import codechicken.nei.recipe.Recipe.RecipeId;
 
 public class GuiCraftingRecipe extends GuiRecipe<ICraftingHandler> {
 
     public static ArrayList<ICraftingHandler> craftinghandlers = new ArrayList<>();
     public static ArrayList<ICraftingHandler> serialCraftingHandlers = new ArrayList<>();
+    private static Set<String> existingHandlers = new HashSet<>();
 
     public static boolean openRecipeGui(String outputId, Object... results) {
         return createRecipeGui(outputId, true, results) != null;
@@ -31,25 +34,34 @@ public class GuiCraftingRecipe extends GuiRecipe<ICraftingHandler> {
 
     public static GuiRecipe<?> createRecipeGui(String outputId, boolean open, Object... results) {
         final Minecraft mc = NEIClientUtils.mc();
-        final BookmarkRecipeId recipeId;
+        final RecipeId recipeId;
+
+        for (int i = 0; i < results.length; i++) {
+            if (results[i] instanceof ItemStack stack) {
+                results[i] = StackInfo.normalizeRecipeQueryStack(stack.copy());
+            }
+        }
 
         if ("item".equals(outputId)) {
-            for (int i = 0; i < results.length; i++) {
-                results[i] = normalizeItemStack((ItemStack) results[i]);
-            }
             recipeId = getRecipeId(mc.currentScreen, (ItemStack) results[0]);
         } else if ("recipeId".equals(outputId)) {
-            recipeId = (BookmarkRecipeId) results[1];
+            recipeId = (RecipeId) results[1];
         } else {
-            recipeId = getCurrentRecipe(mc.currentScreen);
+            recipeId = getCurrentRecipeId(mc.currentScreen);
         }
 
         final ArrayList<ICraftingHandler> handlers = getCraftingHandlers(outputId, results);
 
         if (!handlers.isEmpty()) {
-            final GuiCraftingRecipe gui = new GuiCraftingRecipe(handlers, "recipeId".equals(outputId));
+            final GuiCraftingRecipe gui = new GuiCraftingRecipe(handlers);
 
             if (open) {
+
+                if (NEIClientConfig.showHistoryPanelWidget() && "item".equals(outputId)
+                        && results[0] instanceof ItemStack stack) {
+                    ItemPanels.itemPanel.historyPanel.addItem(stack);
+                }
+
                 mc.displayGuiScreen(gui);
             }
 
@@ -60,38 +72,16 @@ public class GuiCraftingRecipe extends GuiRecipe<ICraftingHandler> {
         return null;
     }
 
-    public static boolean overlayRecipe(ItemStack stack, BookmarkRecipeId recipeId, final Boolean shift) {
-
-        if (stack == null || recipeId == null) {
-            return false;
-        }
-
-        final ArrayList<ICraftingHandler> handlers = getCraftingHandlers("recipeId", stack, recipeId);
-
-        if (!handlers.isEmpty()) {
-            final GuiCraftingRecipe gui = new GuiCraftingRecipe(handlers, true);
-            final int recipe = gui.openTargetRecipe(recipeId);
-
-            if (recipe != -1) {
-                gui.overlayRecipe(recipe, shift);
-                return true;
-            }
-
-        }
-
-        return false;
-    }
-
     public static ArrayList<ICraftingHandler> getCraftingHandlers(String outputId, Object... results) {
         ArrayList<ICraftingHandler> craftinghandlers = GuiCraftingRecipe.craftinghandlers;
         ArrayList<ICraftingHandler> serialCraftingHandlers = GuiCraftingRecipe.serialCraftingHandlers;
-        Function<ICraftingHandler, ICraftingHandler> recipeHandlerFunction;
+        UnaryOperator<ICraftingHandler> recipeHandlerFunction;
 
         if ("recipeId".equals(outputId)) {
             ItemStack stack = (ItemStack) results[0];
-            BookmarkRecipeId recipeId = (BookmarkRecipeId) results[1];
-            craftinghandlers = filterByHandlerName(craftinghandlers, recipeId.handlerName);
-            serialCraftingHandlers = filterByHandlerName(serialCraftingHandlers, recipeId.handlerName);
+            RecipeId recipeId = (RecipeId) results[1];
+            craftinghandlers = filterByHandlerName(craftinghandlers, recipeId.getHandleName());
+            serialCraftingHandlers = filterByHandlerName(serialCraftingHandlers, recipeId.getHandleName());
             recipeHandlerFunction = h -> h.getRecipeHandler("item", stack);
         } else {
             recipeHandlerFunction = h -> h.getRecipeHandler(outputId, results);
@@ -118,49 +108,68 @@ public class GuiCraftingRecipe extends GuiRecipe<ICraftingHandler> {
         return GuiRecipeTab.getHandlerInfo(handler).getHandlerName();
     }
 
-    private static ItemStack normalizeItemStack(ItemStack stack) {
-        GTFluidStackStringifyHandler.replaceAE2FCFluidDrop = true;
-        stack = StackInfo.loadFromNBT(StackInfo.itemStackToNBT(stack));
-        GTFluidStackStringifyHandler.replaceAE2FCFluidDrop = false;
-        return stack;
-    }
+    public static RecipeId getRecipeId(GuiScreen gui, ItemStack stackover) {
 
-    protected static BookmarkRecipeId getRecipeId(GuiScreen gui, ItemStack stackover) {
+        if (gui instanceof GuiRecipe guiRecipe) {
+            final Recipe focusedRecipe = guiRecipe.getFocusedRecipe();
 
-        if (gui instanceof GuiRecipe) {
-            final List<PositionedStack> ingredients = ((GuiRecipe<?>) gui).getFocusedRecipeIngredients();
-            final String handlerName = ((GuiRecipe<?>) gui).getHandlerName();
-
-            if (ingredients != null && !ingredients.isEmpty()) {
-                return new BookmarkRecipeId(handlerName, ingredients);
+            if (focusedRecipe != null) {
+                return focusedRecipe.getRecipeId();
             }
         }
 
-        final Point mouseover = getMousePosition();
-        ItemPanelSlot panelSlot = ItemPanels.bookmarkPanel.getSlotMouseOver(mouseover.x, mouseover.y);
+        final Point mouseover = GuiDraw.getMousePosition();
+        final BookmarksGridSlot panelSlot = ItemPanels.bookmarkPanel.getSlotMouseOver(mouseover.x, mouseover.y);
 
         if (panelSlot != null) {
-            return ItemPanels.bookmarkPanel.getBookmarkRecipeId(panelSlot.slotIndex);
+            return panelSlot.getType() == BookmarkItemType.INGREDIENT || panelSlot.getRecipeId() == null
+                    ? FavoriteRecipes.getFavorite(stackover)
+                    : panelSlot.getRecipeId();
         }
 
-        return ItemPanels.bookmarkPanel.getBookmarkRecipeId(stackover);
+        ItemsGridSlot itemSlot = ItemPanels.itemPanel.getSlotMouseOver(mouseover.x, mouseover.y);
+
+        if (itemSlot == null) {
+            itemSlot = ItemPanels.itemPanel.historyPanel.getSlotMouseOver(mouseover.x, mouseover.y);
+        }
+
+        if (itemSlot == null) {
+            itemSlot = ItemPanels.itemPanel.craftablesPanel.getSlotMouseOver(mouseover.x, mouseover.y);
+        }
+
+        if (itemSlot != null) {
+            return itemSlot.getRecipeId();
+        }
+
+        return null;
     }
 
-    private GuiCraftingRecipe(ArrayList<ICraftingHandler> handlers, boolean limitToOneRecipe) {
+    private GuiCraftingRecipe(ArrayList<ICraftingHandler> handlers) {
         super(NEIClientUtils.mc().currentScreen);
-        this.limitToOneRecipe = limitToOneRecipe;
         this.currenthandlers = handlers;
     }
 
     public static void registerRecipeHandler(ICraftingHandler handler) {
         final String handlerId = handler.getHandlerId();
 
-        if (craftinghandlers.stream().anyMatch(h -> h.getHandlerId().equals(handlerId))
-                || serialCraftingHandlers.stream().anyMatch(h -> h.getHandlerId().equals(handlerId)))
+        if (existingHandlers.contains(handlerId)) {
             return;
+        }
 
-        if (NEIClientConfig.serialHandlers.contains(handlerId)) serialCraftingHandlers.add(handler);
-        else craftinghandlers.add(handler);
+        synchronized (existingHandlers) {
+            existingHandlers.add(handlerId);
+        }
+
+        if (NEIClientConfig.serialHandlers.contains(handlerId)) {
+            synchronized (serialCraftingHandlers) {
+                serialCraftingHandlers.add(handler);
+            }
+        } else {
+            synchronized (craftinghandlers) {
+                craftinghandlers.add(handler);
+            }
+        }
+
     }
 
     @Override
