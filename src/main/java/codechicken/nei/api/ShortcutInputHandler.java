@@ -190,9 +190,9 @@ public abstract class ShortcutInputHandler {
 
     private static boolean copyItemStackID(ItemStack stackover) {
         if (stackover == null || stackover.getItem() == null) return false;
-        GuiScreen.setClipboardString(
+        GuiScreen.setClipboardString("<" +
                 stackover.getItem().delegate.name()
-                        + (stackover.getItemDamage() != 0 ? "/" + stackover.getItemDamage() : ""));
+                        + (stackover.getItemDamage() != 0 ? ":" + stackover.getItemDamage() + ">" : ">"));
         return true;
     }
 
