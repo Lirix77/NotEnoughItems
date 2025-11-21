@@ -1,19 +1,13 @@
 package codechicken.nei.guihook;
 
-import static codechicken.lib.gui.GuiDraw.drawMultilineTip;
-import static codechicken.lib.gui.GuiDraw.fontRenderer;
-import static codechicken.lib.gui.GuiDraw.getMousePosition;
-import static codechicken.lib.gui.GuiDraw.renderEngine;
+import static codechicken.lib.gui.GuiDraw.*;
 import static codechicken.nei.NEIClientUtils.translate;
+import static com.anthonyhilyard.legendarytooltips.util.GuiUtils.drawGradientRect;
+import static com.anthonyhilyard.legendarytooltips.util.GuiUtils.drawHoveringText;
 
-import java.awt.Point;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedList;
+import java.awt.*;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.StringJoiner;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.regex.Pattern;
@@ -21,6 +15,9 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
+import codechicken.nei.*;
+import codechicken.nei.util.RenderTooltipEventHelper;
+import com.anthonyhilyard.legendarytooltips.util.GuiUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.GuiScreen;
@@ -40,18 +37,12 @@ import net.minecraftforge.fluids.FluidStack;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 import org.lwjgl.opengl.GL11;
-import org.lwjgl.opengl.GL12;
 
 import codechicken.lib.gui.GuiDraw;
-import codechicken.nei.ItemList;
-import codechicken.nei.ItemStackSet;
-import codechicken.nei.NEIClientConfig;
-import codechicken.nei.NEIClientUtils;
-import codechicken.nei.NEIModContainer;
 import codechicken.nei.recipe.StackInfo;
 import codechicken.nei.util.ItemUntranslator;
 import codechicken.nei.util.ReadableNumberConverter;
-import codechicken.nei.util.RenderTooltipEventHelper;
+import org.lwjgl.opengl.GL12;
 
 public class GuiContainerManager {
 
@@ -584,82 +575,89 @@ public class GuiContainerManager {
     }
 
     public void renderToolTips(int mousex, int mousey) {
-        try {
         List<String> tooltip = new LinkedList<>();
         FontRenderer font = GuiDraw.fontRenderer;
-
-        synchronized (instanceTooltipHandlers) {
-            for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
-        }
-
-        ItemStack stack = getStackMouseOver(window);
-        boolean showTooltip = shouldShowTooltip(window);
-        if (tooltip.isEmpty() && showTooltip) { // mouseover tip, not holding an item
-            font = getFontRenderer(stack);
-            if (stack != null) {
-                tooltip = itemDisplayNameMultiline(stack, window, true);
-                applyItemCountDetails(tooltip, stack);
-            }
-
+        try {
             synchronized (instanceTooltipHandlers) {
                 for (IContainerTooltipHandler handler : instanceTooltipHandlers)
-                    tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
+                    tooltip = handler.handleTooltip(window, mousex, mousey, tooltip);
             }
-        }
 
-        if (showTooltip && NEIClientConfig.getBooleanSetting("inventory.showHotkeys")) {
-            List<String> hotkeystips = collectHotkeyTips(mousex, mousey);
+            ItemStack stack = GuiContainerManager.getStackMouseOver(window);
+            boolean showTooltip = GuiContainerManager.shouldShowTooltip(window);
+            if (tooltip.isEmpty() && showTooltip) { // mouseover tip, not holding an item
+                font = GuiContainerManager.getFontRenderer(stack);
+                if (stack != null) {
+                    GuiUtils.preItemToolTip(stack);
+                    tooltip = GuiContainerManager.itemDisplayNameMultiline(stack, window, true);
+                    GuiContainerManager.applyItemCountDetails(tooltip, stack);
+                }
 
-            if (!hotkeystips.isEmpty()) {
-
-                if (tooltip.isEmpty()) {
-                    tooltip.addAll(hotkeystips);
-                } else {
-                    tooltip.addAll(1, hotkeystips);
+                synchronized (instanceTooltipHandlers) {
+                    for (IContainerTooltipHandler handler : instanceTooltipHandlers)
+                        tooltip = handler.handleItemTooltip(window, stack, mousex, mousey, tooltip);
                 }
             }
-        }
 
-        if (showTooltip && stack != null && !tooltip.isEmpty()) {
-            final String secondDisplayName = ItemUntranslator.getInstance().getItemStackDisplayName(stack);
+            if (!tooltip.isEmpty()) {
+                tooltip.set(0, tooltip.get(0) + "§h");
+            }
 
-            if (!secondDisplayName.isEmpty()) {
-                tooltip.add(1, EnumChatFormatting.DARK_GRAY + secondDisplayName + GuiDraw.TOOLTIP_LINESPACE);
-            } else {
+            if (showTooltip && NEIClientConfig.getBooleanSetting("inventory.showHotkeys")) {
+                List<String> hotkeystips = collectHotkeyTips(mousex, mousey);
+
+                if (!hotkeystips.isEmpty()) {
+
+                    if (tooltip.isEmpty()) {
+                        tooltip.addAll(hotkeystips);
+                    } else {
+                        tooltip.addAll(1, hotkeystips);
+                    }
+                }
+            }
+
+            if (showTooltip && stack != null && !tooltip.isEmpty()) {
+                final String secondDisplayName = ItemUntranslator.getInstance().getItemStackDisplayName(stack);
+
+                if (!secondDisplayName.isEmpty()) {
+                    tooltip.add(1, EnumChatFormatting.DARK_GRAY + secondDisplayName + GuiDraw.TOOLTIP_LINESPACE);
+                } else {
+                    tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE);
+                }
+
+            } else if (!tooltip.isEmpty()) {
                 tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE);
             }
-
-        } else if (!tooltip.isEmpty()) {
-            tooltip.set(0, tooltip.get(0) + GuiDraw.TOOLTIP_LINESPACE);
-        }
-
-        if (NEIModContainer.isGTNHLibLoaded() && !tooltip.isEmpty()) {
-            if (RenderTooltipEventHelper.post(stack, this.window, mousex, mousey, font)) {
-                return;
-            }
-            Consumer<List<String>> alternativeRenderer = RenderTooltipEventHelper.getAlternativeRenderer();
-            if (alternativeRenderer == null) {
-                drawPagedTooltip(
-                        RenderTooltipEventHelper.getFont(),
-                        RenderTooltipEventHelper.getX() + 12,
-                        RenderTooltipEventHelper.getY() - 12,
-                        tooltip);
+            if(NEIModContainer. isLegendaryToolTipLoaded()) {
+                GuiUtils.drawHoveringText(tooltip, mousex, mousey, window.width, window.height, -1, font);
             } else {
-                GL11.glDisable(GL12.GL_RESCALE_NORMAL);
-                RenderHelper.disableStandardItemLighting();
-                GL11.glDisable(GL11.GL_DEPTH_TEST);
-                GuiDraw.gui.incZLevel(300.0f);
-                alternativeRenderer.accept(tooltip);
-                GuiDraw.gui.incZLevel(-300.0f);
-                GL11.glEnable(GL11.GL_DEPTH_TEST);
-                RenderHelper.enableStandardItemLighting();
-                GL11.glEnable(GL12.GL_RESCALE_NORMAL);
+                if (NEIModContainer.isGTNHLibLoaded() && !tooltip.isEmpty()) {
+                    if (RenderTooltipEventHelper.post(stack, this.window, mousex, mousey, font)) {
+                        return;
+                    }
+                    Consumer<List<String>> alternativeRenderer = RenderTooltipEventHelper.getAlternativeRenderer();
+                    if (alternativeRenderer == null) {
+                        drawPagedTooltip(
+                                RenderTooltipEventHelper.getFont(),
+                                RenderTooltipEventHelper.getX() + 12,
+                                RenderTooltipEventHelper.getY() - 12,
+                                tooltip);
+                    } else {
+                        GL11.glDisable(GL12.GL_RESCALE_NORMAL);
+                        RenderHelper.disableStandardItemLighting();
+                        GL11.glDisable(GL11.GL_DEPTH_TEST);
+                        GuiDraw.gui.incZLevel(300.0f);
+                        alternativeRenderer.accept(tooltip);
+                        GuiDraw.gui.incZLevel(-300.0f);
+                        GL11.glEnable(GL11.GL_DEPTH_TEST);
+                        RenderHelper.enableStandardItemLighting();
+                        GL11.glEnable(GL12.GL_RESCALE_NORMAL);
+                    }
+                    RenderTooltipEventHelper.flush();
+                } else {
+                    drawPagedTooltip(font, mousex + 12, mousey - 12, tooltip);
+                }
             }
-            RenderTooltipEventHelper.flush();
-        } else {
-            drawPagedTooltip(font, mousex + 12, mousey - 12, tooltip);
-        }
         } catch (Throwable e) {
             e.printStackTrace();
         }
@@ -803,7 +801,7 @@ public class GuiContainerManager {
         int height = -2;
         for (int i = 0; i < list.size(); i++) {
             String text = list.get(i);
-            GuiDraw.ITooltipLineHandler line = GuiDraw.getTipLine(text);
+            GuiDraw.ITooltipLineHandler line = getTipLine(text);
             int lineHeight = line != null ? line.getSize().height
                     : text.endsWith(GuiDraw.TOOLTIP_LINESPACE) && i + 1 < list.size() ? 12 : 10;
             if (height + lineHeight <= GuiDraw.displaySize().height - 8 * 2 - 10 || tmp.isEmpty()) {

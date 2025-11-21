@@ -41,6 +41,7 @@ public class NEIModContainer extends DummyModContainer {
 
     private static boolean gregTech5Loaded;
     private static boolean gtnhLibLoaded;
+    private static boolean legendaryToolTipLoaded;
 
     private static ASMDataTable asmDataTable;
 
@@ -66,6 +67,10 @@ public class NEIModContainer extends DummyModContainer {
 
     public static boolean isGTNHLibLoaded() {
         return gtnhLibLoaded;
+    }
+
+    public static boolean isLegendaryToolTipLoaded() {
+        return legendaryToolTipLoaded;
     }
 
     @Override
@@ -119,6 +124,7 @@ public class NEIModContainer extends DummyModContainer {
     public void preInit(FMLPreInitializationEvent event) {
         gregTech5Loaded = Loader.isModLoaded("gregtech") && !Loader.isModLoaded("gregapi_post");
         gtnhLibLoaded = Loader.isModLoaded("gtnhlib");
+        legendaryToolTipLoaded = Loader.isModLoaded("legendarytooltips");
         if (CommonUtils.isClient()) ClientHandler.preInit();
         asmDataTable = event.getAsmData();
     }
